@@ -1,0 +1,118 @@
+import React from "react";
+import { Box, Text } from "ink";
+import type { ContextMenuState } from "./types.js";
+import { APP_VERSION } from "./session.js";
+import { SESSION_MENU_INNER, sessionMenuPad, sessionMenuBorder, formatElapsed } from "./menu.js";
+
+export function ContextMenuOverlay({ menu }: { menu: ContextMenuState }) {
+  if (menu.kind === 'automateLinuxTerminalMenu') {
+    const titleLeft = ' automateLinuxTerminal';
+    const titleRight = APP_VERSION ? APP_VERSION + ' ' : '';
+    const titleGap = SESSION_MENU_INNER - titleLeft.length - titleRight.length;
+    const titleStr = titleLeft + ' '.repeat(Math.max(1, titleGap)) + titleRight;
+    return (
+      <Box position="absolute" marginTop={menu.row} marginLeft={menu.col} flexDirection="column">
+        <Text backgroundColor="#2d2d2d" color="#888888">{`╭${sessionMenuBorder}╮`}</Text>
+        <Text>
+          <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
+          <Text backgroundColor={menu.hoverItem === 0 ? "#3465a4" : "#2d2d2d"} color="#8ae234">{titleStr}</Text>
+          <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
+        </Text>
+        {menu.sessions.length > 0 && (
+          <>
+            <Text backgroundColor="#2d2d2d" color="#888888">{`├${sessionMenuBorder}┤`}</Text>
+            {menu.sessions.map((entry, i) => {
+              const isCopied = menu.copiedSessionIdx === i;
+              const dot = entry.alive ? '●' : '○';
+              const id = entry.sessionId.slice(0, 8);
+              const elapsed = formatElapsed(entry.startMs);
+              const left = ` ${dot} ${id}`;
+              const right = `${elapsed} `;
+              const gap = SESSION_MENU_INNER - left.length - right.length;
+              const normalText = left + ' '.repeat(Math.max(1, gap)) + right;
+              const copiedLabel = ' copied!';
+              const copiedText = copiedLabel + ' '.repeat(Math.max(0, SESSION_MENU_INNER - copiedLabel.length));
+              const color = isCopied ? '#34e2e2' : entry.alive ? '#8ae234' : '#888888';
+              const cwdStr = entry.cwd || '';
+              const cwdDisplay = cwdStr.length > SESSION_MENU_INNER - 2
+                ? ` …${cwdStr.slice(-(SESSION_MENU_INNER - 4))} `
+                : ` ${cwdStr} `;
+              const isHovered = menu.hoverItem === 100 + i;
+              const rowBg = isCopied ? "#1a3a1a" : isHovered ? "#3465a4" : "#2d2d2d";
+              return (
+                <React.Fragment key={entry.sessionId}>
+                  <Text>
+                    <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
+                    <Text backgroundColor={rowBg} color={color}>{(isCopied ? copiedText : (normalText + ' '.repeat(SESSION_MENU_INNER))).slice(0, SESSION_MENU_INNER)}</Text>
+                    <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
+                  </Text>
+                  {entry.cwd && (
+                    <Text>
+                      <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
+                      <Text backgroundColor={rowBg} color="#c4a000">{sessionMenuPad(cwdDisplay)}</Text>
+                      <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
+                    </Text>
+                  )}
+                </React.Fragment>
+              );
+            })}
+          </>
+        )}
+        <Text backgroundColor="#2d2d2d" color="#888888">{`├${sessionMenuBorder}┤`}</Text>
+        <Text>
+          <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
+          <Text backgroundColor={menu.hoverItem === 20 ? "#3465a4" : "#2d2d2d"} color={menu.editingTopic ? "#ffffff" : (menu.topic ? "#ad7fa8" : "#666666")}>
+            {menu.editingTopic
+              ? sessionMenuPad(` ${menu.editBuffer}█`)
+              : sessionMenuPad(menu.topic
+                  ? (menu.topic.length > SESSION_MENU_INNER - 2
+                      ? ` ${menu.topic.slice(0, SESSION_MENU_INNER - 4)}…`
+                      : ` ${menu.topic}`)
+                  : " set topic…")}
+          </Text>
+          <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
+        </Text>
+        <Text>
+          <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
+          <Text backgroundColor={menu.hoverItem === 21 ? "#3465a4" : "#2d2d2d"} color="#888888">
+            {sessionMenuPad(menu.showTopicBar ? " ☑ pin topic" : " ☐ pin topic")}
+          </Text>
+          <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
+        </Text>
+        {menu.stopwatchDisplay != null && (
+          <>
+            <Text backgroundColor="#2d2d2d" color="#888888">{`├${sessionMenuBorder}┤`}</Text>
+            <Text>
+              <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
+              <Text backgroundColor={menu.hoverItem === 10 ? "#3465a4" : "#2d2d2d"} color={menu.stopwatchAction === 'stop' ? "#8ae234" : "#c4a000"}>{(() => {
+                const left = ` timer: ${menu.stopwatchDisplay}`;
+                const right = `${menu.stopwatchAction} `;
+                const gap = SESSION_MENU_INNER - left.length - right.length;
+                return left + ' '.repeat(Math.max(1, gap)) + right;
+              })()}</Text>
+              <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
+            </Text>
+          </>
+        )}
+        <Text backgroundColor="#2d2d2d" color="#888888">{`╰${sessionMenuBorder}╯`}</Text>
+      </Box>
+    );
+  }
+  const copyColor = menu.hasSelection ? "#ffffff" : "#666666";
+  return (
+    <Box position="absolute" marginTop={menu.row} marginLeft={menu.col} flexDirection="column">
+      <Text backgroundColor="#2d2d2d" color="#888888">{"╭────────╮"}</Text>
+      <Text>
+        <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
+        <Text backgroundColor={menu.hoverItem === 0 ? "#3465a4" : "#2d2d2d"} color={copyColor}>{" Copy   "}</Text>
+        <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
+      </Text>
+      <Text>
+        <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
+        <Text backgroundColor={menu.hoverItem === 1 ? "#3465a4" : "#2d2d2d"} color="#ffffff">{" Paste  "}</Text>
+        <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
+      </Text>
+      <Text backgroundColor="#2d2d2d" color="#888888">{"╰────────╯"}</Text>
+    </Box>
+  );
+}
