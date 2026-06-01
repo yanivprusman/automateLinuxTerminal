@@ -75,8 +75,8 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
   const ctxMenuRef = useRef<ContextMenuState | null>(null);
   const stopwatchRef = useRef({ running: false, startMs: 0, accumulatedMs: 0 });
   const topicRef = useRef('');
-  const showTopicBarRef = useRef(false);
-  const [showTopicBar, setShowTopicBar] = useState(false);
+  const showTopicBarRef = useRef(true);
+  const [showTopicBar, setShowTopicBar] = useState(true);
   const swTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const sessionHistoryRef = useRef<SessionHistoryEntry[]>([]);
 
