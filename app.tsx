@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
 import { render, Box, Text, useStdout, useStdin } from "ink";
-import { spawn } from "child_process";
 import { createWriteStream } from "fs";
 import type { WriteStream } from "fs";
 import pty from "node-pty";
@@ -12,31 +11,7 @@ import { SESSION_ID, LAUNCH_DIR, SCRIPT_LOG_FILE, writeMetadata, cleanupMetadata
 import { EMPTY_SPAN, spansEqual, normalizeSelection, readBufferRow, readBuffer } from "./buffer.js";
 import { SESSION_MENU_INNER, formatStopwatch, computeMenuLayout, sessionIdxFromRowOff } from "./menu.js";
 import { ContextMenuOverlay } from "./ContextMenuOverlay.js";
-
-// Clipboard tooling. This app runs on a GNOME *Wayland* session (often as root),
-// where xclip can't reach XWayland unless XAUTHORITY is exported into the env —
-// which it isn't in the terminal's environment. That made xclip exit 1
-// ("Invalid MIT-MAGIC-COOKIE-1 / Can't open display :0") and silently broke BOTH
-// copy and paste. Use the native Wayland tools (wl-copy/wl-paste) when on Wayland;
-// they need only WAYLAND_DISPLAY + XDG_RUNTIME_DIR, no X auth. Fall back to xclip
-// only on a real X11 session, where XAUTHORITY is present.
-const ON_WAYLAND = !!process.env.WAYLAND_DISPLAY;
-const CLIPBOARD_WRITE_CMD: string[] = ON_WAYLAND
-  ? ["wl-copy"]
-  : ["xclip", "-selection", "clipboard"];
-const CLIPBOARD_READ_CMD: string[] = ON_WAYLAND
-  ? ["wl-paste", "-n"]
-  : ["xclip", "-selection", "clipboard", "-o"];
-
-// Spawn the clipboard writer and feed it `text`. Best-effort: clipboard failures
-// must never crash the terminal.
-function clipboardWrite(text: string): void {
-  const [cmd, ...args] = CLIPBOARD_WRITE_CMD;
-  const clip = spawn(cmd, args, { stdio: ["pipe", "ignore", "ignore"] });
-  clip.on("error", () => {});
-  clip.stdin.on("error", () => {});
-  clip.stdin.end(text);
-}
+import { clipboardWrite, clipboardRead } from "./clipboard.js";
 
 function Clock() {
   const [now, setNow] = useState(new Date());
@@ -229,12 +204,7 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
     };
 
     const pasteFromClipboard = () => {
-      const [cmd, ...args] = CLIPBOARD_READ_CMD;
-      const clip = spawn(cmd, args, { stdio: ["ignore", "pipe", "ignore"] });
-      clip.on('error', () => {});
-      let data = '';
-      clip.stdout.on('data', (chunk: Buffer) => { data += chunk.toString(); });
-      clip.on('close', () => {
+      clipboardRead().then((data) => {
         if (data && shellRef.current) {
           shellRef.current.write(data);
         }
