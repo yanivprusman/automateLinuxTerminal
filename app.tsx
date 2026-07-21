@@ -116,6 +116,19 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
       scriptLogStream = createWriteStream(SCRIPT_LOG_FILE, { flags: 'a' });
     }
 
+    // The shell reports its directory with OSC 7 and xterm consumes it while
+    // parsing, so forward it to the terminal hosting us (Ptyxis). That is how a
+    // new tab knows where the tab that spawned it was. OSC occupies no cells,
+    // so writing it between Ink frames does not disturb the rendering.
+    let reportedCwd = "";
+    term.parser.registerOscHandler(7, (uri: string) => {
+      if (uri && uri !== reportedCwd) {
+        reportedCwd = uri;
+        process.stdout.write(`\x1b]7;${uri}\x1b\\`);
+      }
+      return true;
+    });
+
     shell.onData((data: string) => {
       if (scriptLogStream) scriptLogStream.write(data);
       term.write(data, () => {
