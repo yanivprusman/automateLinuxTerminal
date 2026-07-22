@@ -37,6 +37,19 @@ export function cleanupMetadata(): void {
   try { unlinkSync(METADATA_FILE); } catch {}
 }
 
+// Persist the tab's topic into the session metadata so external tools (the Claude Voice
+// stack) can label and per-session-mute this session by its human name rather than a UUID.
+// Merges into the existing metadata file rather than rewriting the whole thing.
+export function writeTopic(topic: string): void {
+  if (!METADATA_FILE) return;
+  try {
+    let meta: Record<string, unknown> = {};
+    try { meta = JSON.parse(readFileSync(METADATA_FILE, 'utf-8')); } catch {}
+    meta.topic = topic;
+    writeFileSync(METADATA_FILE, JSON.stringify(meta, null, 2));
+  } catch {}
+}
+
 export function registerWithDashboard(shellPid: number): void {
   if (!SESSION_ID) return;
   const body = JSON.stringify({
