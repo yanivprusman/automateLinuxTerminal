@@ -7,7 +7,7 @@ import xterm from "@xterm/headless";
 const { Terminal: XTerminal } = xterm;
 
 import type { Span, Line, Selection, ContextMenuState, SessionHistoryEntry } from "./types.js";
-import { SESSION_ID, LAUNCH_DIR, SCRIPT_LOG_FILE, writeMetadata, writeTopic, cleanupMetadata, registerWithDashboard, notifySessionEnded, detectClaudeSession, isPidAlive } from "./session.js";
+import { SESSION_ID, LAUNCH_DIR, SCRIPT_LOG_FILE, writeMetadata, writeTopic, writePidTopic, cleanupMetadata, registerWithDashboard, notifySessionEnded, detectClaudeSession, isPidAlive } from "./session.js";
 import { EMPTY_SPAN, spansEqual, normalizeSelection, readBufferRow, readBuffer } from "./buffer.js";
 import { SESSION_MENU_INNER, formatStopwatch, computeMenuLayout, sessionIdxFromRowOff } from "./menu.js";
 import { ContextMenuOverlay } from "./ContextMenuOverlay.js";
@@ -109,7 +109,7 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
 
     let scriptLogStream: WriteStream | null = null;
     if (SESSION_ID) {
-      writeMetadata(shell.pid);
+      writeMetadata(shell.pid); writePidTopic(topicRef.current);
       registerWithDashboard(shell.pid);
     }
     if (SCRIPT_LOG_FILE) {
@@ -369,7 +369,7 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
                 if (m.kind === 'automateLinuxTerminalMenu' && onItem && itemIdx === 20) {
                   if (m.editingTopic) {
                     const newTopic = m.editBuffer.trim();
-                    topicRef.current = newTopic; writeTopic(newTopic);
+                    topicRef.current = newTopic; writeTopic(newTopic); writePidTopic(newTopic);
                     const upd: ContextMenuState = { ...m, topic: newTopic, editingTopic: false, editBuffer: '' };
                     ctxMenuRef.current = upd;
                     setCtxMenu(upd);
@@ -428,7 +428,7 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
             const m = ctxMenuRef.current!;
             if (ch === '\r' || ch === '\n') {
               const newTopic = m.editBuffer.trim();
-              topicRef.current = newTopic; writeTopic(newTopic);
+              topicRef.current = newTopic; writeTopic(newTopic); writePidTopic(newTopic);
               closeMenu();
               inBuf = ''; return;
             } else if (ch === '\x7f' || ch === '\x08') {

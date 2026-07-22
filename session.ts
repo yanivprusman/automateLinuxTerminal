@@ -32,9 +32,22 @@ export function writeMetadata(shellPid: number): void {
   writeFileSync(METADATA_FILE, JSON.stringify(meta, null, 2));
 }
 
+// Also keyed by THIS terminal's own pid, not the Claude session id. The session-id file
+// only exists when the terminal was launched with CLAUDE_SESSION_ID preset; a tab started
+// manually has none, so its topic was invisible. The Claude Voice `say` command finds this
+// file by walking up its own process tree to the owning terminal, which is robust to
+// session-id changes on resume and to how the tab was launched.
+const PID_TOPIC_FILE = `/tmp/automateLinuxTerminal-topic-${process.pid}.json`;
+
+export function writePidTopic(topic: string): void {
+  try {
+    writeFileSync(PID_TOPIC_FILE, JSON.stringify({ topic, pid: process.pid, claudeSessionId: SESSION_ID }));
+  } catch {}
+}
+
 export function cleanupMetadata(): void {
-  if (!METADATA_FILE) return;
-  try { unlinkSync(METADATA_FILE); } catch {}
+  try { if (METADATA_FILE) unlinkSync(METADATA_FILE); } catch {}
+  try { unlinkSync(PID_TOPIC_FILE); } catch {}
 }
 
 // Persist the tab's topic into the session metadata so external tools (the Claude Voice
