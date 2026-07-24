@@ -86,6 +86,22 @@ export function propagateTopicToDashboard(topic: string, shellPid: number): void
   }).catch(() => {});
 }
 
+// Restore this session's topic from the dashboard's durable store (keyed by the
+// claude session id, which is stable across resumes). Called at startup so a
+// topic set before a resume/reboot reappears in the topic bar instead of dying
+// with the previous terminal process.
+export async function fetchStoredTopic(): Promise<string> {
+  if (!SESSION_ID) return '';
+  try {
+    const res = await fetch(`http://localhost:${DASHBOARD_PORT}/api/claude-sessions/${SESSION_ID}`);
+    if (!res.ok) return '';
+    const data = await res.json();
+    return typeof data.customTitle === 'string' ? data.customTitle : '';
+  } catch {
+    return '';
+  }
+}
+
 export function registerWithDashboard(shellPid: number): void {
   if (!SESSION_ID) return;
   const body = JSON.stringify({

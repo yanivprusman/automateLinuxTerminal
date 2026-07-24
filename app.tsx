@@ -7,7 +7,7 @@ import xterm from "@xterm/headless";
 const { Terminal: XTerminal } = xterm;
 
 import type { Span, Line, Selection, ContextMenuState, SessionHistoryEntry } from "./types.js";
-import { SESSION_ID, LAUNCH_DIR, SCRIPT_LOG_FILE, writeMetadata, writeTopic, writePidTopic, propagateTopicToDashboard, cleanupMetadata, registerWithDashboard, notifySessionEnded, detectClaudeSession, isPidAlive } from "./session.js";
+import { SESSION_ID, LAUNCH_DIR, SCRIPT_LOG_FILE, writeMetadata, writeTopic, writePidTopic, propagateTopicToDashboard, fetchStoredTopic, cleanupMetadata, registerWithDashboard, notifySessionEnded, detectClaudeSession, isPidAlive } from "./session.js";
 import { EMPTY_SPAN, spansEqual, normalizeSelection, readBufferRow, readBuffer } from "./buffer.js";
 import { SESSION_MENU_INNER, formatStopwatch, computeMenuLayout, sessionIdxFromRowOff } from "./menu.js";
 import { ContextMenuOverlay } from "./ContextMenuOverlay.js";
@@ -111,6 +111,15 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
     if (SESSION_ID) {
       writeMetadata(shell.pid); writePidTopic(topicRef.current);
       registerWithDashboard(shell.pid);
+      // Restore the topic set before a resume/reboot — it lives durably in the
+      // dashboard keyed by the claude session id, which survives resumes. Only
+      // fill an empty topic; a topic typed in THIS tab always wins.
+      fetchStoredTopic().then(stored => {
+        if (stored && !topicRef.current) {
+          topicRef.current = stored;
+          writeTopic(stored); writePidTopic(stored);
+        }
+      });
     }
     if (SCRIPT_LOG_FILE) {
       scriptLogStream = createWriteStream(SCRIPT_LOG_FILE, { flags: 'a' });
