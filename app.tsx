@@ -129,6 +129,37 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
       return true;
     });
 
+    // Titles (OSC 0/2) are likewise consumed by xterm, so no title ever reached
+    // Ptyxis -- every window stayed "Terminal", and Claude Voice's focus-session
+    // (which finds a session's window by the title "claude-<sessionId>") could
+    // never match one. Two explicit states:
+    //   - a Claude session runs inside this terminal -> PIN the host title to its
+    //     stable handle "claude-<sessionId>". Claude Code repaints the title with
+    //     transient status text, which must not clobber the window's identity.
+    //   - no Claude session -> forward child titles as-is (so `cl`'s launch-time
+    //     title, used for its own windowId lookup, propagates too).
+    let hostTitle = "";
+    const setHostTitle = (t: string) => {
+      if (t && t !== hostTitle) {
+        hostTitle = t;
+        process.stdout.write(`\x1b]2;${t}\x07`);
+      }
+    };
+    let claudeTitle = SESSION_ID ? `claude-${SESSION_ID}` : "";
+    let childTitle = "";
+    term.onTitleChange((t: string) => {
+      childTitle = t;
+      if (!claudeTitle) setHostTitle(t);
+    });
+    const syncClaudeTitle = () => {
+      const info = detectClaudeSession(shell.pid);
+      claudeTitle = info && info.sessionId !== 'unknown' ? `claude-${info.sessionId}`
+                  : SESSION_ID ? `claude-${SESSION_ID}` : "";
+      setHostTitle(claudeTitle || childTitle);
+    };
+    syncClaudeTitle();
+    const titleSyncId = setInterval(syncClaudeTitle, 5000);
+
     shell.onData((data: string) => {
       if (scriptLogStream) scriptLogStream.write(data);
       term.write(data, () => {
@@ -568,6 +599,7 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
       process.stdout.write('\x1b[?1002l\x1b[?1006l\x1b[?1003l');
       clearInterval(refreshId);
       clearInterval(blinkId);
+      clearInterval(titleSyncId);
       if (swTimerRef.current) clearInterval(swTimerRef.current);
       if (scriptLogStream) scriptLogStream.end();
       cleanupMetadata();
@@ -579,6 +611,7 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
       process.stdout.write('\x1b[?1002l\x1b[?1006l\x1b[?1003l');
       clearInterval(refreshId);
       clearInterval(blinkId);
+      clearInterval(titleSyncId);
       if (swTimerRef.current) clearInterval(swTimerRef.current);
       if (flushTimer) clearTimeout(flushTimer);
       stdin?.off("data", handleInput);
