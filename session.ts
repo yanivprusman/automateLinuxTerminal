@@ -2,8 +2,15 @@ import { execFileSync } from "child_process";
 import { readFileSync, writeFileSync, unlinkSync } from "fs";
 import type { ClaudeSessionInfo } from "./types.js";
 
-export const SESSION_ID = process.env.CLAUDE_SESSION_ID || '';
 export const TMUX_SESSION = process.env.CLAUDE_TMUX_SESSION || '';
+// CLAUDE_SESSION_ID alone is NOT trustworthy: the first ptyxis window after boot
+// forks ptyxis-agent, which keeps that window's environment forever — so every
+// manually-opened tab inherits a stale CLAUDE_SESSION_ID from a long-dead
+// session, and all tabs would overwrite that one session's metadata file and
+// keep a ghost entry alive in the dashboard. Managed launches (dashboard
+// launch/resume wrappers, feedback tmux) always set CLAUDE_TMUX_SESSION next to
+// it, so only trust the id when both are present.
+export const SESSION_ID = TMUX_SESSION ? (process.env.CLAUDE_SESSION_ID || '') : '';
 export const APP_NAME = process.env.CLAUDE_APP_NAME || '';
 export const LAUNCH_DIR = process.env.CLAUDE_LAUNCH_DIR || process.cwd();
 export const SCRIPT_LOG_FILE = process.env.CLAUDE_SCRIPT_LOG_FILE || '';
@@ -61,6 +68,22 @@ export function writeTopic(topic: string): void {
     meta.topic = topic;
     writeFileSync(METADATA_FILE, JSON.stringify(meta, null, 2));
   } catch {}
+}
+
+// Push the topic to the dashboard registry as the session's custom title so
+// every session UI (dashboard web, dashboardAndroid) shows it. The dashboard
+// PATCH accepts a Claude session id as well as its own key, so send the id of
+// the claude actually running in this tab's shell — the env-inherited
+// SESSION_ID is absent for manual tabs and stale after a `cl` re-run.
+export function propagateTopicToDashboard(topic: string, shellPid: number): void {
+  const live = detectClaudeSession(shellPid);
+  const sid = (live && live.sessionId !== 'unknown' ? live.sessionId : '') || SESSION_ID;
+  if (!sid) return;
+  fetch(`http://localhost:${DASHBOARD_PORT}/api/claude-sessions/${sid}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ customTitle: topic }),
+  }).catch(() => {});
 }
 
 export function registerWithDashboard(shellPid: number): void {
@@ -148,8 +171,8 @@ export function isPidAlive(pid: number): boolean {
   try { process.kill(pid, 0); return true; } catch { return false; }
 }
 
-if (SESSION_ID) {
-  const onSignal = () => { cleanupMetadata(); process.exit(0); };
-  process.on('SIGTERM', onSignal);
-  process.on('SIGHUP', onSignal);
-}
+// Always registered (not just for managed sessions): manual tabs still write a
+// pid-keyed topic file that must not outlive the process.
+const onSignal = () => { cleanupMetadata(); process.exit(0); };
+process.on('SIGTERM', onSignal);
+process.on('SIGHUP', onSignal);
