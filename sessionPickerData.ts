@@ -235,17 +235,20 @@ export function readSessionDigest(file: string): SessionDigest {
   return { first: cleanPrompt(firstRaw), last: cleanPrompt(lastRaw), userTurns, sample: [...head, ...tail] };
 }
 
-export function loadTopicSessions(): PickerData {
+/**
+ * Every topic in the durable store, by claude session id.
+ *
+ * Absent store = no topics set yet (the dashboard writes it and `data/**` is
+ * gitignored, so a fresh machine simply has none). A corrupt or unreadable one
+ * is a real fault and still throws.
+ */
+function readTopics(): Map<string, string> {
   let meta: Record<string, { customTitle?: string }>;
   try {
     meta = JSON.parse(readFileSync(META_FILE, "utf8")) as Record<string, { customTitle?: string }>;
   } catch (err) {
-    // The dashboard writes this store and `data/**` is gitignored, so on a fresh
-    // machine it simply does not exist yet. That is the "no topics set" case the
-    // caller already has a message for — not a crash. A corrupt or unreadable
-    // store is a real fault and still throws.
     if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
-    return { sessions: [], unavailable: 0 };
+    return new Map();
   }
 
   const topics = new Map<string, string>();
@@ -253,27 +256,45 @@ export function loadTopicSessions(): PickerData {
     const topic = entry?.customTitle?.trim();
     if (topic) topics.set(sessionId, topic);
   }
+  return topics;
+}
 
+/**
+ * Every transcript on this machine, newest first, each carrying its topic — or
+ * `''` when it has none. Untitled sessions are the whole point for autoTopic,
+ * which names them; the picker filters them back out.
+ *
+ * `newerThanMs` skips transcripts older than a cutoff before their cwd is read,
+ * which is the expensive part: there are hundreds of transcripts and a caller
+ * that only cares about live work should not pay for the dead ones.
+ */
+export function loadAllSessions(newerThanMs = 0): TopicSession[] {
+  const topics = readTopics();
   const byId = new Map<string, TopicSession>();
+
   for (const dir of readdirSync(PROJECTS_DIR, { withFileTypes: true })) {
     if (!dir.isDirectory()) continue;
     const dirPath = `${PROJECTS_DIR}/${dir.name}`;
     for (const entry of readdirSync(dirPath)) {
       if (!entry.endsWith(".jsonl")) continue;
       const sessionId = entry.slice(0, -".jsonl".length);
-      const topic = topics.get(sessionId);
-      if (!topic) continue;
 
       const file = `${dirPath}/${entry}`;
       const mtimeMs = statSync(file).mtimeMs;
+      if (mtimeMs < newerThanMs) continue;
       // One id can appear under two project dirs when a session's directory was
       // renamed. The newest transcript is the one `claude --resume` will read.
       const prev = byId.get(sessionId);
       if (prev && prev.mtimeMs >= mtimeMs) continue;
-      byId.set(sessionId, { sessionId, topic, cwd: readCwd(file), mtimeMs, file });
+      byId.set(sessionId, { sessionId, topic: topics.get(sessionId) ?? "", cwd: readCwd(file), mtimeMs, file });
     }
   }
 
-  const sessions = [...byId.values()].sort((a, b) => b.mtimeMs - a.mtimeMs);
+  return [...byId.values()].sort((a, b) => b.mtimeMs - a.mtimeMs);
+}
+
+export function loadTopicSessions(): PickerData {
+  const topics = readTopics();
+  const sessions = loadAllSessions().filter((s) => s.topic);
   return { sessions, unavailable: topics.size - sessions.length };
 }
