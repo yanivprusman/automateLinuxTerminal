@@ -27,6 +27,15 @@ export interface TopicSession {
   /** Directory the session ran in. `claude --resume` only finds a session from there. */
   cwd: string;
   mtimeMs: number;
+  /** Transcript path, kept so a digest can be read on demand without re-scanning. */
+  file: string;
+}
+
+/** What a session was about, in the user's own words. See readSessionDigest. */
+export interface SessionDigest {
+  first: string;
+  last: string;
+  userTurns: number;
 }
 
 export interface PickerData {
@@ -66,8 +75,81 @@ function readCwd(file: string): string {
   return matchCwd(readFileSync(file, "utf8"));
 }
 
+/**
+ * Strip the wrappers Claude Code and feedback-lib inject around user prompts,
+ * so a digest shows what the user typed rather than the scaffolding.
+ *
+ * Deliberately a local copy of the dashboard's `cleanPromptText`: importing it
+ * would tie the picker to a second repo whose location is per-peer configurable
+ * (`d getAppRoots`), and the picker's whole point is to work on its own.
+ */
+function cleanPrompt(text: string): string {
+  return text
+    .replace(/^\[(?:Platform|Page):[^\]]*\]\s*/, "")
+    .replace(/<\/?command-message>/g, "\n")
+    .replace(/<command-name>[\s\S]*?<\/command-name>/g, "\n")
+    .replace(/<\/?command-args>/g, "\n")
+    .replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+/**
+ * First and last thing the user actually said, plus how many turns they took.
+ *
+ * No model is involved: a session is recognizable from its own opening line far
+ * more reliably than from generated prose, and this stays instant on keypress.
+ * The whole file is read because the last turn is at the end by definition —
+ * paid only when a row is opened, never for the list.
+ */
+export function readSessionDigest(file: string): SessionDigest {
+  let firstRaw = "";
+  let lastRaw = "";
+  let userTurns = 0;
+
+  for (const line of readFileSync(file, "utf8").split("\n")) {
+    // Cheap substring rejects before JSON.parse: tool results and meta entries
+    // carry role "user" but are not the user speaking.
+    if (!line || !line.includes('"type":"user"')) continue;
+    if (line.includes('"tool_result"') || line.includes('"isMeta":true')) continue;
+
+    let entry: any;
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (entry.type !== "user" || entry.message?.role !== "user") continue;
+
+    const content = entry.message.content;
+    const text =
+      typeof content === "string"
+        ? content
+        : Array.isArray(content)
+          ? (content.find((b: any) => b.type === "text")?.text ?? "")
+          : "";
+    if (!text) continue;
+
+    userTurns++;
+    if (!firstRaw) firstRaw = text;
+    lastRaw = text;
+  }
+
+  return { first: cleanPrompt(firstRaw), last: cleanPrompt(lastRaw), userTurns };
+}
+
 export function loadTopicSessions(): PickerData {
-  const meta = JSON.parse(readFileSync(META_FILE, "utf8")) as Record<string, { customTitle?: string }>;
+  let meta: Record<string, { customTitle?: string }>;
+  try {
+    meta = JSON.parse(readFileSync(META_FILE, "utf8")) as Record<string, { customTitle?: string }>;
+  } catch (err) {
+    // The dashboard writes this store and `data/**` is gitignored, so on a fresh
+    // machine it simply does not exist yet. That is the "no topics set" case the
+    // caller already has a message for — not a crash. A corrupt or unreadable
+    // store is a real fault and still throws.
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+    return { sessions: [], unavailable: 0 };
+  }
 
   const topics = new Map<string, string>();
   for (const [sessionId, entry] of Object.entries(meta)) {
@@ -91,7 +173,7 @@ export function loadTopicSessions(): PickerData {
       // renamed. The newest transcript is the one `claude --resume` will read.
       const prev = byId.get(sessionId);
       if (prev && prev.mtimeMs >= mtimeMs) continue;
-      byId.set(sessionId, { sessionId, topic, cwd: readCwd(file), mtimeMs });
+      byId.set(sessionId, { sessionId, topic, cwd: readCwd(file), mtimeMs, file });
     }
   }
 

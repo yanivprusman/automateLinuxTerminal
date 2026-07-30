@@ -1,10 +1,11 @@
 // Sanity test for the by-topic session index behind sessionPicker.tsx.
-// Asserts the three things the picker cannot work without: topics come out of
-// the dashboard's durable store, every listed session has a resolvable working
-// directory, and the list is newest-first.
+// Asserts the things the picker cannot work without: topics come out of the
+// dashboard's durable store, every listed session has a resolvable working
+// directory, the list is newest-first, and a row can produce a digest (what
+// the `→` key shows and speaks).
 //
 //   npx tsx tests/testSessionPickerData.ts
-import { loadTopicSessions } from "../sessionPickerData.js";
+import { loadTopicSessions, readSessionDigest } from "../sessionPickerData.js";
 
 const { sessions, unavailable } = loadTopicSessions();
 
@@ -36,5 +37,21 @@ if (empty) {
   process.exit(1);
 }
 
-console.log(`newest: "${sessions[0]!.topic}" in ${sessions[0]!.cwd}`);
+const noFile = sessions.filter((s) => !s.file);
+if (noFile.length > 0) {
+  console.error(`FAIL: ${noFile.length} session(s) carry no transcript path — → cannot open a digest`);
+  process.exit(1);
+}
+
+// The digest is what `→` shows and speaks. An empty first prompt on the newest
+// session means the user-message filter stopped matching the transcript format.
+const newest = sessions[0]!;
+const digest = readSessionDigest(newest.file);
+if (!digest.userTurns || !digest.first) {
+  console.error(`FAIL: no user messages parsed from ${newest.sessionId}'s transcript`);
+  process.exit(1);
+}
+
+console.log(`newest: "${newest.topic}" in ${newest.cwd}`);
+console.log(`digest: ${digest.userTurns} user turns, starts "${digest.first.replace(/\s+/g, " ").slice(0, 60)}…"`);
 console.log("PASS");

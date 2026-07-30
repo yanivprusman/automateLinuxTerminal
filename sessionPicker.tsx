@@ -11,12 +11,18 @@
  */
 import React, { useEffect, useMemo, useState } from "react";
 import { render, Box, Text, useApp, useInput, useStdout } from "ink";
-import { writeFileSync } from "fs";
-import { loadTopicSessions, type TopicSession } from "./sessionPickerData.js";
+import { existsSync, writeFileSync } from "fs";
+import { spawn } from "child_process";
+import { loadTopicSessions, readSessionDigest, type SessionDigest, type TopicSession } from "./sessionPickerData.js";
 
 const TOPIC_W = 24;
 const AGE_W = 5;
 const ID_W = 8;
+/** Longest prompt excerpt shown per line of the digest panel. */
+const EXCERPT_W = 220;
+/** Rows the digest panel can occupy once both excerpts wrap. */
+const DIGEST_ROWS = 8;
+const SAY = "/root/bin/say";
 
 function pad(text: string, width: number): string {
   return text.length >= width ? `${text.slice(0, width - 1)}…` : text.padEnd(width);
@@ -38,6 +44,49 @@ function relTime(ms: number): string {
   return `${Math.round(days / 365)}y`;
 }
 
+/** Spell the age out — "3h" reads aloud as "three h". */
+function spokenAge(ms: number): string {
+  const mins = Math.max(0, Math.round((Date.now() - ms) / 60000));
+  if (mins < 60) return `${mins} minutes old`;
+  const hours = Math.round(mins / 60);
+  if (hours < 48) return `about ${hours} hour${hours === 1 ? "" : "s"} old`;
+  const days = Math.round(hours / 24);
+  return `about ${days} day${days === 1 ? "" : "s"} old`;
+}
+
+function excerpt(text: string, max: number): string {
+  const flat = text.replace(/\s+/g, " ").trim();
+  return flat.length > max ? `${flat.slice(0, max)}…` : flat;
+}
+
+/**
+ * Compose the digest for the ear, separately from the panel: paths are unspeakable
+ * (per the house rule) and a full prompt is far too long to listen to.
+ */
+function spokenDigest(session: TopicSession, digest: SessionDigest): string {
+  const forEar = (t: string) => excerpt(t.replace(/(^|\s)\/\S+/g, " a path"), 150);
+  const parts = [
+    `${session.topic}. ${spokenAge(session.mtimeMs)}, ${digest.userTurns} message${digest.userTurns === 1 ? "" : "s"} from you.`,
+  ];
+  if (digest.first) parts.push(`It started with: ${forEar(digest.first)}.`);
+  if (digest.last && digest.userTurns > 1) parts.push(`Most recently: ${forEar(digest.last)}.`);
+  return parts.join(" ");
+}
+
+/**
+ * Fire-and-forget, detached on purpose: pressing enter right after opening a
+ * digest exits the picker, and the sentence should finish anyway. `say` mutes
+ * itself when the session is muted, so there is nothing to check here.
+ */
+function speak(text: string): void {
+  if (!existsSync(SAY)) return;
+  try {
+    spawn(SAY, [text], { detached: true, stdio: "ignore" }).unref();
+  } catch {
+    // A failed voice must never take the picker down with it.
+  }
+}
+
 interface AppProps {
   sessions: TopicSession[];
   unavailable: number;
@@ -51,6 +100,7 @@ function Picker({ sessions, unavailable, initialFilter, outFile }: AppProps) {
   const [filter, setFilter] = useState(initialFilter);
   const [cursor, setCursor] = useState(0);
   const [error, setError] = useState("");
+  const [digest, setDigest] = useState<{ session: TopicSession; data: SessionDigest } | null>(null);
   // Render one empty frame before unmounting: Ink erases the previous frame on
   // every render, so this wipes the list off the terminal. Unmounting straight
   // from a drawn frame would leave it behind, above whatever runs next.
@@ -60,7 +110,10 @@ function Picker({ sessions, unavailable, initialFilter, outFile }: AppProps) {
   }, [done, exit]);
 
   const cols = Math.max(40, stdout?.columns ?? 80);
-  const pageSize = Math.max(5, Math.min(15, (stdout?.rows ?? 24) - 6));
+  // The digest panel is drawn below the list, so the list has to give up those
+  // rows — otherwise the whole frame outgrows the terminal and the top scrolls away.
+  const chrome = digest ? 6 + DIGEST_ROWS : 6;
+  const pageSize = Math.max(3, Math.min(15, (stdout?.rows ?? 24) - chrome));
   const pathW = Math.max(8, cols - 2 - TOPIC_W - 1 - AGE_W - 1 - ID_W - 1);
 
   const visible = useMemo(() => {
@@ -78,16 +131,40 @@ function Picker({ sessions, unavailable, initialFilter, outFile }: AppProps) {
   const start = Math.max(0, Math.min(index - Math.floor(pageSize / 2), visible.length - pageSize));
   const window = visible.slice(Math.max(0, start), Math.max(0, start) + pageSize);
 
+  // Moving or filtering leaves the open digest describing a row that is no longer
+  // under the cursor, so both close it.
   const move = (delta: number) => {
     if (!visible.length) return;
     setError("");
+    setDigest(null);
     setCursor(Math.max(0, Math.min(index + delta, visible.length - 1)));
   };
 
   const changeFilter = (next: string) => {
     setError("");
+    setDigest(null);
     setFilter(next);
     setCursor(0);
+  };
+
+  /** What was this session about? Read its own opening and closing words. */
+  const openDigest = () => {
+    const picked = visible[index];
+    if (!picked) return;
+    setError("");
+    let data: SessionDigest;
+    try {
+      data = readSessionDigest(picked.file);
+    } catch {
+      setError(`Could not read ${picked.sessionId.slice(0, 8)}'s transcript.`);
+      return;
+    }
+    if (!data.userTurns) {
+      setError(`${picked.sessionId.slice(0, 8)} has no user messages recorded.`);
+      return;
+    }
+    setDigest({ session: picked, data });
+    speak(spokenDigest(picked, data));
   };
 
   const choose = () => {
@@ -107,10 +184,16 @@ function Picker({ sessions, unavailable, initialFilter, outFile }: AppProps) {
     if (key.ctrl && input === "c") {
       setDone(true);
     } else if (key.escape) {
-      if (filter) changeFilter("");
+      // Unwind one layer at a time: digest, then filter, then quit.
+      if (digest) setDigest(null);
+      else if (filter) changeFilter("");
       else setDone(true);
     } else if (key.return) {
       choose();
+    } else if (key.rightArrow) {
+      openDigest();
+    } else if (key.leftArrow) {
+      setDigest(null);
     } else if (key.upArrow || (key.ctrl && input === "p")) {
       move(-1);
     } else if (key.downArrow || (key.ctrl && input === "n")) {
@@ -155,10 +238,35 @@ function Picker({ sessions, unavailable, initialFilter, outFile }: AppProps) {
         );
       })}
 
+      {digest && (
+        <Box flexDirection="column" marginTop={1} marginLeft={2} width={cols - 4}>
+          <Text>
+            <Text color="#ad7fa8" bold>
+              {digest.session.topic}
+            </Text>
+            <Text color="#666666">{`  ${digest.data.userTurns} message${digest.data.userTurns === 1 ? "" : "s"} · ${relTime(digest.session.mtimeMs)} old`}</Text>
+          </Text>
+          <Text color="#888888" wrap="wrap">
+            <Text color="#666666">{"started  "}</Text>
+            {excerpt(digest.data.first, EXCERPT_W)}
+          </Text>
+          {digest.data.userTurns > 1 && (
+            <Text color="#888888" wrap="wrap">
+              <Text color="#666666">{"latest   "}</Text>
+              {excerpt(digest.data.last, EXCERPT_W)}
+            </Text>
+          )}
+        </Box>
+      )}
+
       {error ? (
         <Text color="#cc0000">{`  ${error}`}</Text>
       ) : (
-        <Text color="#666666">{"  ↑↓ move · type to filter · enter resume · esc clear/quit"}</Text>
+        <Text color="#666666">
+          {digest
+            ? "  ↑↓ move · ← close · enter resume · esc quit"
+            : "  ↑↓ move · type to filter · → what was it about · enter resume · esc clear/quit"}
+        </Text>
       )}
 
       <Text>
