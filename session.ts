@@ -26,6 +26,26 @@ export const DASHBOARD_PORT = process.env.CLAUDE_DASHBOARD_PORT || '3007';
 
 export const METADATA_FILE = SESSION_ID ? `/tmp/automateLinuxTerminal-${SESSION_ID}.json` : '';
 
+// The claude ACTUALLY running in this tab's shell, refreshed by the title poll
+// (which already walks the process tree every 5s, so this costs nothing extra).
+//
+// SESSION_ID above is empty for any manually-opened tab — deliberately, see the
+// ghost-session comment — and stale after a `cl` re-run inside the same tab. The
+// write path already knew this (propagateTopicToDashboard resolves the live id
+// before pushing a topic); the READ path did not, so a tab with no launcher env
+// could never see a topic set from outside it. Anything keyed by "the session in
+// this tab" must resolve through here rather than trusting the environment.
+let liveSessionId = '';
+
+export function noteLiveSessionId(id: string | undefined | null): void {
+  liveSessionId = id && id !== 'unknown' ? id : '';
+}
+
+/** The claude session id this tab is FOR, live process first, launcher env second. */
+export function currentSessionId(): string {
+  return liveSessionId || SESSION_ID;
+}
+
 export const APP_VERSION = (() => {
   try {
     return `v${execFileSync('git', ['rev-list', '--count', 'HEAD'], { encoding: 'utf-8', cwd: import.meta.dirname, timeout: 1000 }).trim()}`;
@@ -133,7 +153,7 @@ const PID_TOPIC_FILE = `/tmp/automateLinuxTerminal-topic-${process.pid}.json`;
 
 export function writePidTopic(topic: string): void {
   try {
-    writeFileSync(PID_TOPIC_FILE, JSON.stringify({ topic, pid: process.pid, claudeSessionId: SESSION_ID }));
+    writeFileSync(PID_TOPIC_FILE, JSON.stringify({ topic, pid: process.pid, claudeSessionId: currentSessionId() }));
   } catch {}
 }
 
@@ -158,11 +178,10 @@ export function writeTopic(topic: string): void {
 // Push the topic to the dashboard registry as the session's custom title so
 // every session UI (dashboard web, dashboardAndroid) shows it. The dashboard
 // PATCH accepts a Claude session id as well as its own key, so send the id of
-// the claude actually running in this tab's shell — the env-inherited
-// SESSION_ID is absent for manual tabs and stale after a `cl` re-run.
-export function propagateTopicToDashboard(topic: string, shellPid: number): void {
-  const live = detectClaudeSession(shellPid);
-  const sid = (live && live.sessionId !== 'unknown' ? live.sessionId : '') || SESSION_ID;
+// the claude actually running in this tab's shell — the SAME id the read path
+// resolves, which is what makes a topic set here readable back here.
+export function propagateTopicToDashboard(topic: string): void {
+  const sid = currentSessionId();
   if (!sid) return;
   fetch(`http://localhost:${DASHBOARD_PORT}/api/claude-sessions/${sid}`, {
     method: 'PATCH',
@@ -181,12 +200,18 @@ export function propagateTopicToDashboard(topic: string, shellPid: number): void
 // tell those apart — collapsing them is how a dashboard restart would wipe a
 // topic the user typed.
 export async function readStoredTopic(): Promise<string | null> {
-  if (!SESSION_ID) return null;
+  const sid = currentSessionId();
+  if (!sid) return null;
   try {
-    const res = await fetch(`http://localhost:${DASHBOARD_PORT}/api/claude-sessions/${SESSION_ID}`);
+    const res = await fetch(`http://localhost:${DASHBOARD_PORT}/api/claude-sessions/${sid}`);
     if (!res.ok) return null;
     const data = await res.json();
-    return typeof data.customTitle === 'string' ? data.customTitle : '';
+    // A session the store has never heard of answers 200 with customTitle:null.
+    // That is "no answer for this session", NOT "this session has no topic" —
+    // only a STRING is an answer, and '' is the answer meaning cleared. Treating
+    // null as '' would let an unregistered tab (every manually-opened one) wipe
+    // the topic its user typed on the very first poll.
+    return typeof data.customTitle === 'string' ? data.customTitle : null;
   } catch {
     return null;
   }

@@ -8,7 +8,7 @@ import xterm from "@xterm/headless";
 const { Terminal: XTerminal } = xterm;
 
 import type { Span, Line, Selection, ContextMenuState, SessionHistoryEntry } from "./types.js";
-import { SESSION_ID, LAUNCH_DIR, SCRIPT_LOG_FILE, writeMetadata, writeTopic, writePidTopic, propagateTopicToDashboard, fetchStoredTopic, readStoredTopic, cleanupMetadata, registerWithDashboard, notifySessionEnded, detectClaudeSession, isPidAlive, claimHostWindow, writeWindowId } from "./session.js";
+import { SESSION_ID, LAUNCH_DIR, SCRIPT_LOG_FILE, writeMetadata, writeTopic, writePidTopic, propagateTopicToDashboard, fetchStoredTopic, readStoredTopic, cleanupMetadata, registerWithDashboard, notifySessionEnded, detectClaudeSession, noteLiveSessionId, isPidAlive, claimHostWindow, writeWindowId } from "./session.js";
 import { EMPTY_SPAN, spansEqual, normalizeSelection, readBufferRow, readBuffer } from "./buffer.js";
 import { SESSION_MENU_INNER, formatStopwatch, computeMenuLayout, sessionRowAt } from "./menu.js";
 import { ContextMenuOverlay } from "./ContextMenuOverlay.js";
@@ -167,8 +167,13 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
       childTitle = t;
       if (!claudeTitle) setHostTitle(t);
     });
+    // This walk is the ONE place the running claude is identified. Everything
+    // keyed by "the session in this tab" — the window title, the topic read and
+    // write, the pid-topic file — reads it back through currentSessionId(), so
+    // they can never disagree about which session this tab is showing.
     const syncClaudeTitle = () => {
       const info = detectClaudeSession(shell.pid);
+      noteLiveSessionId(info?.sessionId);
       claudeTitle = info && info.sessionId !== 'unknown' ? `claude-${info.sessionId}`
                   : SESSION_ID ? `claude-${SESSION_ID}` : "";
       setHostTitle(claudeTitle || childTitle);
@@ -180,8 +185,14 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
     // the set-topic skill). The durable store keyed by the claude session id is
     // the single source of truth; without this poll the bar only ever showed a
     // topic typed here or restored at startup, so an external set looked lost.
+    //
+    // NOT gated on SESSION_ID: that is empty for every ordinary `terminal` tab,
+    // which made this poll dead code exactly where it was needed — the topic
+    // reached the dashboard and the phone but the bar above kept the old word.
+    // currentSessionId() returns '' until a claude is actually running here, and
+    // readStoredTopic answers null for that, so an idle tab still reads nothing.
     // Skipped while the topic is being edited here — the tab typing it wins.
-    const topicSyncId = SESSION_ID ? setInterval(() => {
+    const topicSyncId = setInterval(() => {
       readStoredTopic().then(stored => {
         // null = could not read; adopting it would clear a live topic.
         if (stored === null || stored === topicRef.current) return;
@@ -190,7 +201,7 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
         writeTopic(stored); writePidTopic(stored);
         needsRefresh.current = true;
       });
-    }, 10000) : null;
+    }, 10000);
 
     // Publish WHICH window hosts this session, so "focus this session's
     // terminal" never has to guess between two windows showing the same
@@ -482,7 +493,7 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
                   if (m.editingTopic) {
                     const newTopic = m.editBuffer.trim();
                     topicRef.current = newTopic; writeTopic(newTopic); writePidTopic(newTopic);
-                    if (shellRef.current) propagateTopicToDashboard(newTopic, shellRef.current.pid);
+                    propagateTopicToDashboard(newTopic);
                     const upd: ContextMenuState = { ...m, topic: newTopic, editingTopic: false, editBuffer: '' };
                     ctxMenuRef.current = upd;
                     setCtxMenu(upd);
@@ -542,7 +553,7 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
             if (ch === '\r' || ch === '\n') {
               const newTopic = m.editBuffer.trim();
               topicRef.current = newTopic; writeTopic(newTopic); writePidTopic(newTopic);
-              if (shellRef.current) propagateTopicToDashboard(newTopic, shellRef.current.pid);
+              propagateTopicToDashboard(newTopic);
               closeMenu();
               inBuf = ''; return;
             } else if (ch === '\x7f' || ch === '\x08') {
@@ -683,7 +694,7 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
       clearInterval(refreshId);
       clearInterval(blinkId);
       clearInterval(titleSyncId);
-      if (topicSyncId) clearInterval(topicSyncId);
+      clearInterval(topicSyncId);
       if (swTimerRef.current) clearInterval(swTimerRef.current);
       if (scriptLogStream) scriptLogStream.end();
       cleanupMetadata();
@@ -696,7 +707,7 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
       clearInterval(refreshId);
       clearInterval(blinkId);
       clearInterval(titleSyncId);
-      if (topicSyncId) clearInterval(topicSyncId);
+      clearInterval(topicSyncId);
       if (swTimerRef.current) clearInterval(swTimerRef.current);
       if (flushTimer) clearTimeout(flushTimer);
       stdin?.off("data", handleInput);
