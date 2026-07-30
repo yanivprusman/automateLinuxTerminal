@@ -8,7 +8,7 @@ import xterm from "@xterm/headless";
 const { Terminal: XTerminal } = xterm;
 
 import type { Span, Line, Selection, ContextMenuState, SessionHistoryEntry } from "./types.js";
-import { SESSION_ID, LAUNCH_DIR, SCRIPT_LOG_FILE, writeMetadata, writeTopic, writePidTopic, propagateTopicToDashboard, fetchStoredTopic, cleanupMetadata, registerWithDashboard, notifySessionEnded, detectClaudeSession, isPidAlive, claimHostWindow, writeWindowId } from "./session.js";
+import { SESSION_ID, LAUNCH_DIR, SCRIPT_LOG_FILE, writeMetadata, writeTopic, writePidTopic, propagateTopicToDashboard, fetchStoredTopic, readStoredTopic, cleanupMetadata, registerWithDashboard, notifySessionEnded, detectClaudeSession, isPidAlive, claimHostWindow, writeWindowId } from "./session.js";
 import { EMPTY_SPAN, spansEqual, normalizeSelection, readBufferRow, readBuffer } from "./buffer.js";
 import { SESSION_MENU_INNER, formatStopwatch, computeMenuLayout, sessionRowAt } from "./menu.js";
 import { ContextMenuOverlay } from "./ContextMenuOverlay.js";
@@ -175,6 +175,22 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
     };
     syncClaudeTitle();
     const titleSyncId = setInterval(syncClaudeTitle, 5000);
+
+    // Adopt a topic set from outside this tab (the dashboard card, the phone,
+    // the set-topic skill). The durable store keyed by the claude session id is
+    // the single source of truth; without this poll the bar only ever showed a
+    // topic typed here or restored at startup, so an external set looked lost.
+    // Skipped while the topic is being edited here — the tab typing it wins.
+    const topicSyncId = SESSION_ID ? setInterval(() => {
+      readStoredTopic().then(stored => {
+        // null = could not read; adopting it would clear a live topic.
+        if (stored === null || stored === topicRef.current) return;
+        if (ctxMenuRef.current?.editingTopic) return;
+        topicRef.current = stored;
+        writeTopic(stored); writePidTopic(stored);
+        needsRefresh.current = true;
+      });
+    }, 10000) : null;
 
     // Publish WHICH window hosts this session, so "focus this session's
     // terminal" never has to guess between two windows showing the same
@@ -667,6 +683,7 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
       clearInterval(refreshId);
       clearInterval(blinkId);
       clearInterval(titleSyncId);
+      if (topicSyncId) clearInterval(topicSyncId);
       if (swTimerRef.current) clearInterval(swTimerRef.current);
       if (scriptLogStream) scriptLogStream.end();
       cleanupMetadata();
@@ -679,6 +696,7 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
       clearInterval(refreshId);
       clearInterval(blinkId);
       clearInterval(titleSyncId);
+      if (topicSyncId) clearInterval(topicSyncId);
       if (swTimerRef.current) clearInterval(swTimerRef.current);
       if (flushTimer) clearTimeout(flushTimer);
       stdin?.off("data", handleInput);

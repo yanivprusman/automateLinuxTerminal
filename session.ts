@@ -175,16 +175,25 @@ export function propagateTopicToDashboard(topic: string, shellPid: number): void
 // claude session id, which is stable across resumes). Called at startup so a
 // topic set before a resume/reboot reappears in the topic bar instead of dying
 // with the previous terminal process.
-export async function fetchStoredTopic(): Promise<string> {
-  if (!SESSION_ID) return '';
+// Read the durable topic. `null` means "could not read it" (no session id, the
+// dashboard is down, a bad response); `''` means the store answered and this
+// session has no topic. A caller that would otherwise CLEAR a live topic has to
+// tell those apart — collapsing them is how a dashboard restart would wipe a
+// topic the user typed.
+export async function readStoredTopic(): Promise<string | null> {
+  if (!SESSION_ID) return null;
   try {
     const res = await fetch(`http://localhost:${DASHBOARD_PORT}/api/claude-sessions/${SESSION_ID}`);
-    if (!res.ok) return '';
+    if (!res.ok) return null;
     const data = await res.json();
     return typeof data.customTitle === 'string' ? data.customTitle : '';
   } catch {
-    return '';
+    return null;
   }
+}
+
+export async function fetchStoredTopic(): Promise<string> {
+  return (await readStoredTopic()) ?? '';
 }
 
 export function registerWithDashboard(shellPid: number): void {
