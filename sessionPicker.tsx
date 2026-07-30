@@ -101,6 +101,11 @@ function Picker({ sessions, unavailable, initialFilter, outFile }: AppProps) {
   const [cursor, setCursor] = useState(0);
   const [error, setError] = useState("");
   const [digest, setDigest] = useState<{ session: TopicSession; data: SessionDigest } | null>(null);
+  // Typing filters only inside search mode. The picker used to filter on every
+  // printable key, which made single-letter commands impossible — `e` would just
+  // add "e" to the search box. `/` to search is the same trade less and vim make,
+  // and it buys the whole alphabet for actions.
+  const [searching, setSearching] = useState(false);
   // Render one empty frame before unmounting: Ink erases the previous frame on
   // every render, so this wipes the list off the terminal. Unmounting straight
   // from a drawn frame would leave it behind, above whatever runs next.
@@ -181,31 +186,70 @@ function Picker({ sessions, unavailable, initialFilter, outFile }: AppProps) {
   };
 
   useInput((input, key) => {
+    // Keys that mean the same thing in both modes.
     if (key.ctrl && input === "c") {
       setDone(true);
-    } else if (key.escape) {
-      // Unwind one layer at a time: digest, then filter, then quit.
+      return;
+    }
+    if (key.return) {
+      choose();
+      return;
+    }
+    if (key.upArrow || (key.ctrl && input === "p")) {
+      move(-1);
+      return;
+    }
+    if (key.downArrow || (key.ctrl && input === "n")) {
+      move(1);
+      return;
+    }
+    if (key.pageUp) {
+      move(-pageSize);
+      return;
+    }
+    if (key.pageDown) {
+      move(pageSize);
+      return;
+    }
+
+    if (searching) {
+      if (key.escape) {
+        // Leave search with the text intact; a second esc clears it (below).
+        setSearching(false);
+      } else if (key.backspace || key.delete) {
+        changeFilter(filter.slice(0, -1));
+      } else if (input && !key.ctrl && !key.meta && !key.tab) {
+        changeFilter(filter + input);
+      }
+      return;
+    }
+
+    // A fast typist or a paste arrives as ONE multi-character `input`, so a
+    // command is the FIRST character, never the whole string. Comparing the
+    // whole string sent "/mon" down the unknown-command path instead of opening
+    // the search — the remainder has to seed the search box, not be dropped.
+    const command = input.slice(0, 1);
+    const rest = input.slice(1);
+
+    if (key.escape) {
+      // Unwind one layer at a time: digest, then search text, then quit.
       if (digest) setDigest(null);
       else if (filter) changeFilter("");
       else setDone(true);
-    } else if (key.return) {
-      choose();
-    } else if (key.rightArrow) {
+    } else if (command === "/") {
+      setError("");
+      setSearching(true);
+      if (rest) changeFilter(filter + rest);
+    } else if (command === "e" || key.rightArrow) {
       openDigest();
+    } else if (command === "q") {
+      setDone(true);
     } else if (key.leftArrow) {
       setDigest(null);
-    } else if (key.upArrow || (key.ctrl && input === "p")) {
-      move(-1);
-    } else if (key.downArrow || (key.ctrl && input === "n")) {
-      move(1);
-    } else if (key.pageUp) {
-      move(-pageSize);
-    } else if (key.pageDown) {
-      move(pageSize);
-    } else if (key.backspace || key.delete) {
-      changeFilter(filter.slice(0, -1));
-    } else if (input && !key.ctrl && !key.meta && !key.tab) {
-      changeFilter(filter + input);
+    } else if (command && !key.ctrl && !key.meta) {
+      // Say so rather than silently swallowing the key — a letter that used to
+      // filter now does nothing, and that needs to be visible, not guessed at.
+      setError(`"${command}" is not a command — press / to search.`);
     }
   });
 
@@ -263,16 +307,22 @@ function Picker({ sessions, unavailable, initialFilter, outFile }: AppProps) {
         <Text color="#cc0000">{`  ${error}`}</Text>
       ) : (
         <Text color="#666666">
-          {digest
-            ? "  ↑↓ move · ← close · enter resume · esc quit"
-            : "  ↑↓ move · type to filter · → what was it about · enter resume · esc clear/quit"}
+          {searching
+            ? "  typing searches · ↑↓ move · enter resume · esc leave search"
+            : digest
+              ? "  ↑↓ move · e again for another · ← close · enter resume · esc quit"
+              : "  ↑↓ move · e what was it about · / search · enter resume · q quit"}
         </Text>
       )}
 
       <Text>
-        <Text color="#666666">{"  filter: "}</Text>
-        <Text color="#ffffff">{filter}</Text>
-        <Text color="#ad7fa8">▏</Text>
+        {/* The prompt names the mode: a "/" cursor means keys are going into the
+            search, a "›" means they are commands. Without it, a picker that
+            sometimes filters and sometimes doesn't is indistinguishable from broken. */}
+        <Text color={searching ? "#ad7fa8" : "#666666"}>{searching ? "  /" : "  ›"}</Text>
+        <Text color="#ffffff">{` ${filter}`}</Text>
+        {searching && <Text color="#ad7fa8">▏</Text>}
+        {!searching && filter && <Text color="#666666">{"  (filtered)"}</Text>}
       </Text>
     </Box>
   );
