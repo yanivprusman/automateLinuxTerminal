@@ -43,12 +43,19 @@ if (noFile.length > 0) {
   process.exit(1);
 }
 
-// The digest is what `→` shows and speaks. An empty first prompt on the newest
-// session means the user-message filter stopped matching the transcript format.
+// The sample is the prompt `e` sends to claude. Empty means the user-message
+// filter stopped matching the transcript format, and every summary would be
+// generated from nothing.
 const newest = sessions[0]!;
 const digest = readSessionDigest(newest.file);
-if (!digest.userTurns || !digest.first) {
+if (!digest.userTurns || !digest.first || !digest.sample.length) {
   console.error(`FAIL: no user messages parsed from ${newest.sessionId}'s transcript`);
+  process.exit(1);
+}
+
+// The caps are what keep a 70MB session's prompt the same size as a small one.
+if (digest.sample.length > 60 || digest.sample.some((t) => t.length > 400)) {
+  console.error(`FAIL: sample exceeds its caps (${digest.sample.length} turns) — prompt size is unbounded`);
   process.exit(1);
 }
 

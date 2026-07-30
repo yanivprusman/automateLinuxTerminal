@@ -36,7 +36,21 @@ export interface SessionDigest {
   first: string;
   last: string;
   userTurns: number;
+  /** Bounded sample of the user's turns, oldest first — the prompt fed to Claude. */
+  sample: string[];
 }
+
+/**
+ * How much of a session is handed to the summarizer.
+ *
+ * Transcripts reach 70MB, so "send the session" is never an option — the model
+ * gets the user's own turns, head and tail, each clipped. Those two ends are
+ * what identify a session: what it set out to do and where it ended up. The
+ * caps bound the prompt to a few thousand tokens no matter how long the run was.
+ */
+const SAMPLE_HEAD = 30;
+const SAMPLE_TAIL = 30;
+const SAMPLE_TURN_CHARS = 400;
 
 export interface PickerData {
   sessions: TopicSession[];
@@ -106,6 +120,8 @@ export function readSessionDigest(file: string): SessionDigest {
   let firstRaw = "";
   let lastRaw = "";
   let userTurns = 0;
+  const head: string[] = [];
+  const tail: string[] = [];
 
   for (const line of readFileSync(file, "utf8").split("\n")) {
     // Cheap substring rejects before JSON.parse: tool results and meta entries
@@ -133,9 +149,19 @@ export function readSessionDigest(file: string): SessionDigest {
     userTurns++;
     if (!firstRaw) firstRaw = text;
     lastRaw = text;
+
+    // Keep the head outright and slide a fixed-size window over the tail, so a
+    // 64-turn session costs the same memory as a 6-turn one.
+    const turn = cleanPrompt(text).replace(/\s+/g, " ").slice(0, SAMPLE_TURN_CHARS);
+    if (!turn) continue;
+    if (head.length < SAMPLE_HEAD) head.push(turn);
+    else {
+      tail.push(turn);
+      if (tail.length > SAMPLE_TAIL) tail.shift();
+    }
   }
 
-  return { first: cleanPrompt(firstRaw), last: cleanPrompt(lastRaw), userTurns };
+  return { first: cleanPrompt(firstRaw), last: cleanPrompt(lastRaw), userTurns, sample: [...head, ...tail] };
 }
 
 export function loadTopicSessions(): PickerData {
