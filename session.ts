@@ -11,6 +11,14 @@ export const TMUX_SESSION = process.env.CLAUDE_TMUX_SESSION || '';
 // launch/resume wrappers, feedback tmux) always set CLAUDE_TMUX_SESSION next to
 // it, so only trust the id when both are present.
 export const SESSION_ID = TMUX_SESSION ? (process.env.CLAUDE_SESSION_ID || '') : '';
+// CLAUDE_TMUX_SESSION is the launch KEY every managed launch carries — it is NOT
+// evidence that a tmux server is involved (the dashboard's `terminal` launches set
+// it too). Readers treat the metadata `tmuxSession` field as a LIVE tmux target:
+// the dashboard DELETES metadata whose tmux session doesn't exist, which silently
+// erased every dashboard-launched terminal session's metadata file a few seconds
+// after startup — and with it this host's window claim. `$TMUX` is set by tmux for
+// everything inside a pane, so it answers the question honestly.
+export const IN_TMUX = !!process.env.TMUX;
 export const APP_NAME = process.env.CLAUDE_APP_NAME || '';
 export const LAUNCH_DIR = process.env.CLAUDE_LAUNCH_DIR || process.cwd();
 export const SCRIPT_LOG_FILE = process.env.CLAUDE_SCRIPT_LOG_FILE || '';
@@ -28,7 +36,7 @@ export function writeMetadata(shellPid: number): void {
   if (!METADATA_FILE) return;
   const meta = {
     claudeSessionId: SESSION_ID,
-    tmuxSession: TMUX_SESSION,
+    tmuxSession: IN_TMUX ? TMUX_SESSION : '',
     appName: APP_NAME,
     launchDir: LAUNCH_DIR,
     pid: process.pid,
@@ -52,14 +60,17 @@ export function writeMetadata(shellPid: number): void {
 // it, and publishes that id. A dead host publishes nothing, so it can never be
 // mistaken for this one.
 
-/** Ask the daemon for the id of the window whose title is exactly `title`. */
-function windowIdByTitle(title: string): string {
+/**
+ * Ask the daemon for the id of the window whose title is exactly one of `titles`.
+ * Returns '' unless EXACTLY ONE window matches — two windows wearing the same
+ * title is the ambiguity this whole mechanism exists to remove, so a tie claims
+ * nothing rather than claiming wrong.
+ */
+function windowIdByTitle(titles: string[]): string {
   try {
     const raw = execFileSync('daemon', ['send', 'listWindows'], { encoding: 'utf-8', timeout: 3000 });
     const wins = JSON.parse(raw) as { id: number; title?: string }[];
-    const hits = wins.filter(w => w.title === title);
-    // A nonce is unique by construction; more than one hit means we are not
-    // looking at what we think we are, so claim nothing.
+    const hits = wins.filter(w => w.title && titles.includes(w.title));
     return hits.length === 1 ? String(hits[0].id) : '';
   } catch { return ''; }
 }
@@ -88,15 +99,29 @@ export async function claimHostWindow(
   setTitle(nonce);
   try {
     // GNOME sees the new title a frame or two later; poll rather than sleep long.
-    for (let i = 0; i < 20; i++) {
+    for (let i = 0; i < 15; i++) {
       await new Promise(r => setTimeout(r, 100));
-      const id = windowIdByTitle(nonce);
+      const id = windowIdByTitle([nonce]);
       if (id) return id;
     }
-    return '';
   } finally {
     restoreTitle();
   }
+
+  // The nonce never appeared, so this window's title is not ours to set: a window
+  // opened with `ptyxis --new-window -T <title>` (how the dashboard launches and
+  // resumes sessions) keeps that title and ignores the OSC titles we write. Those
+  // titles carry a freshly minted session id, so at STARTUP — before any resume can
+  // leave a same-titled twin behind — matching one is still an identification, not
+  // a guess. windowIdByTitle insists on a unique match either way.
+  const given = [SESSION_ID && `claude-${SESSION_ID}`, TMUX_SESSION].filter(Boolean) as string[];
+  if (!given.length) return '';
+  for (let i = 0; i < 10; i++) {
+    const id = windowIdByTitle(given);
+    if (id) return id;
+    await new Promise(r => setTimeout(r, 200));
+  }
+  return '';
 }
 
 // Also keyed by THIS terminal's own pid, not the Claude session id. The session-id file
@@ -171,7 +196,7 @@ export function registerWithDashboard(shellPid: number): void {
     workDir: LAUNCH_DIR,
     scriptFile: SCRIPT_LOG_FILE,
     termTitle: TMUX_SESSION,
-    launchMethod: 'tmux',
+    launchMethod: IN_TMUX ? 'tmux' : 'terminal',
     source: 'terminal',
     pid: shellPid,
   });
