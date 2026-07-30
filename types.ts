@@ -42,6 +42,11 @@ export interface ContextMenuState {
   topicRowOff: number;
   showTopicBar: boolean;
   copiedSessionIdx: number;
+  // Which session's captions line is reporting something, and what it says ("opening…",
+  // or the reason it did not open). A launcher that fails must say so on the row that was
+  // clicked -- a menu item that silently does nothing is indistinguishable from a misclick.
+  captionsIdx: number;
+  captionsMsg: string;
 }
 
 export interface ClaudeSessionInfo {

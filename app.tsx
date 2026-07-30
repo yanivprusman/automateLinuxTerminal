@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from "react";
 import { render, Box, Text, useStdout, useStdin } from "ink";
 import { createWriteStream } from "fs";
 import type { WriteStream } from "fs";
+import { spawn } from "child_process";
 import pty from "node-pty";
 import xterm from "@xterm/headless";
 const { Terminal: XTerminal } = xterm;
@@ -9,9 +10,15 @@ const { Terminal: XTerminal } = xterm;
 import type { Span, Line, Selection, ContextMenuState, SessionHistoryEntry } from "./types.js";
 import { SESSION_ID, LAUNCH_DIR, SCRIPT_LOG_FILE, writeMetadata, writeTopic, writePidTopic, propagateTopicToDashboard, fetchStoredTopic, cleanupMetadata, registerWithDashboard, notifySessionEnded, detectClaudeSession, isPidAlive } from "./session.js";
 import { EMPTY_SPAN, spansEqual, normalizeSelection, readBufferRow, readBuffer } from "./buffer.js";
-import { SESSION_MENU_INNER, formatStopwatch, computeMenuLayout, sessionIdxFromRowOff } from "./menu.js";
+import { SESSION_MENU_INNER, formatStopwatch, computeMenuLayout, sessionRowAt } from "./menu.js";
 import { ContextMenuOverlay } from "./ContextMenuOverlay.js";
 import { clipboardWrite, clipboardRead } from "./clipboard.js";
+
+// The Claude Voice history window, narrowed to one session. A script rather than a URL we
+// open ourselves: it owns "raise the existing window instead of piling up duplicates", and
+// being a script it is re-read on every run -- that behaviour can change without rebuilding
+// this terminal.
+const VOICE_HISTORY_CMD = "/root/bin/claude-voice-history";
 
 function Clock() {
   const [now, setNow] = useState(new Date());
@@ -289,7 +296,7 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
         const menuW = SESSION_MENU_INNER + 2;
         const r = Math.max(0, Math.min(row, d.rows - layout.height));
         const c = Math.max(0, Math.min(col, d.cols - menuW));
-        ctxMenuRef.current = { kind: 'automateLinuxTerminalMenu', row: r, col: c, hasSelection: false, hoverItem: -1, sessions: [...history], stopwatchDisplay: formatStopwatch(swMs), stopwatchAction: sw.running ? 'stop' : 'start', stopwatchRowOff: layout.stopwatchRow, topic: topicRef.current, editingTopic: false, editBuffer: '', topicRowOff: layout.topicRow, showTopicBar: showTopicBarRef.current, copiedSessionIdx: -1 };
+        ctxMenuRef.current = { kind: 'automateLinuxTerminalMenu', row: r, col: c, hasSelection: false, hoverItem: -1, sessions: [...history], stopwatchDisplay: formatStopwatch(swMs), stopwatchAction: sw.running ? 'stop' : 'start', stopwatchRowOff: layout.stopwatchRow, topic: topicRef.current, editingTopic: false, editBuffer: '', topicRowOff: layout.topicRow, showTopicBar: showTopicBarRef.current, copiedSessionIdx: -1, captionsIdx: -1, captionsMsg: '' };
         if (sw.running) {
           if (swTimerRef.current) clearInterval(swTimerRef.current);
           swTimerRef.current = setInterval(() => {
@@ -310,7 +317,7 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
           const s = normalizeSelection(selection.current!);
           return !(s.startRow === s.endRow && s.startCol === s.endCol);
         })();
-        ctxMenuRef.current = { kind: 'clipboard', row: r, col: c, hasSelection: hasSel, hoverItem: -1, sessions: [], stopwatchDisplay: null, stopwatchAction: null, stopwatchRowOff: 0, topic: '', editingTopic: false, editBuffer: '', topicRowOff: 0, showTopicBar: false, copiedSessionIdx: -1 };
+        ctxMenuRef.current = { kind: 'clipboard', row: r, col: c, hasSelection: hasSel, hoverItem: -1, sessions: [], stopwatchDisplay: null, stopwatchAction: null, stopwatchRowOff: 0, topic: '', editingTopic: false, editBuffer: '', topicRowOff: 0, showTopicBar: false, copiedSessionIdx: -1, captionsIdx: -1, captionsMsg: '' };
       }
       setCtxMenu({ ...ctxMenuRef.current });
       process.stdout.write('\x1b[?1003h');
@@ -348,8 +355,9 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
                 else if (rowOff === m.topicRowOff + 1) itemIdx = 21;
                 else if (rowOff === m.stopwatchRowOff) itemIdx = 10;
                 else {
-                  const si = sessionIdxFromRowOff(rowOff, m.sessions);
-                  itemIdx = si >= 0 ? 100 + si : -1;
+                  // 100 + i = the session itself (copy its id), 200 + i = its captions.
+                  const hit = sessionRowAt(rowOff, m.sessions);
+                  itemIdx = hit ? (hit.action === 'captions' ? 200 : 100) + hit.idx : -1;
                 }
                 menuW = SESSION_MENU_INNER;
               } else {
@@ -365,6 +373,43 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
                   setCtxMenu(updated);
                 }
               } else if (button === 0 && isPress) {
+                if (m.kind === 'automateLinuxTerminalMenu' && onItem && itemIdx >= 200) {
+                  const si = itemIdx - 200;
+                  const sessEntry = m.sessions[si];
+                  if (sessEntry) {
+                    const note = (msg: string, closeAfter: number) => {
+                      if (!ctxMenuRef.current || ctxMenuRef.current.kind !== 'automateLinuxTerminalMenu') return;
+                      const u: ContextMenuState = { ...ctxMenuRef.current, captionsIdx: si, captionsMsg: msg };
+                      ctxMenuRef.current = u;
+                      setCtxMenu(u);
+                      if (closeAfter) setTimeout(closeMenu, closeAfter);
+                    };
+                    // Detached so the history window outlives this menu -- but stderr is
+                    // PIPED, not discarded. The launcher refuses loudly (no port from the
+                    // daemon, unreachable voice server) and swallowing that would leave the
+                    // row saying "opening…" while nothing ever opened.
+                    const child = spawn(VOICE_HISTORY_CMD, ['--session', sessEntry.sessionId],
+                                        { detached: true, stdio: ['ignore', 'ignore', 'pipe'] });
+                    let err = '';
+                    child.stderr?.on('data', (b: Buffer) => { err += b.toString(); });
+                    // The menu stays up until the launcher has had its say -- closing on a
+                    // timer would race the failure and hide it. The guard is only there so
+                    // a hung launcher cannot pin the menu open.
+                    const guard = setTimeout(closeMenu, 4000);
+                    child.on('error', () => { clearTimeout(guard); note('▸ no claude-voice', 3000); });
+                    child.on('exit', code => {
+                      clearTimeout(guard);
+                      if (!code) { setTimeout(closeMenu, 400); return; }
+                      const line = (err.split('\n').find(l => l.trim()) || `failed (${code})`).trim();
+                      note('▸ ' + (line.length > 23 ? line.slice(0, 22) + '…' : line), 3400);
+                    });
+                    child.unref();
+                    note('▸ opening…', 0);
+                  } else {
+                    closeMenu();
+                  }
+                  pos += sgrMatch[0].length; continue;
+                }
                 if (m.kind === 'automateLinuxTerminalMenu' && onItem && itemIdx >= 100) {
                   const si = itemIdx - 100;
                   const sessEntry = m.sessions[si];

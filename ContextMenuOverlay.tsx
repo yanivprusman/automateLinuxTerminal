@@ -53,6 +53,18 @@ export function ContextMenuOverlay({ menu }: { menu: ContextMenuState }) {
                       <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
                     </Text>
                   )}
+                  {/* Everything this session has said aloud, in the Claude Voice history
+                      window, narrowed to this session alone. */}
+                  <Text>
+                    <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
+                    <Text
+                      backgroundColor={menu.hoverItem === 200 + i ? "#3465a4" : "#2d2d2d"}
+                      color={menu.captionsIdx === i ? "#34e2e2" : "#729fcf"}
+                    >
+                      {sessionMenuPad(menu.captionsIdx === i ? `   ${menu.captionsMsg}` : "   ▸ captions")}
+                    </Text>
+                    <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
+                  </Text>
                 </React.Fragment>
               );
             })}

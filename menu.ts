@@ -31,6 +31,7 @@ export function computeMenuLayout(sessions: SessionHistoryEntry[], hasStopwatch:
     for (const e of sessions) {
       row++;                     // session line
       if (e.cwd) row++;         // cwd line
+      row++;                     // captions line
     }
   }
   row++;                         // topic separator
@@ -45,16 +46,27 @@ export function computeMenuLayout(sessions: SessionHistoryEntry[], hasStopwatch:
   return { titleRow, topicRow, stopwatchRow, height: row };
 }
 
-export function sessionIdxFromRowOff(rowOff: number, sessions: SessionHistoryEntry[]): number {
-  if (sessions.length === 0) return -1;
+export type SessionRowAction = 'copy' | 'captions';
+
+/** Which session a menu row belongs to, and what clicking it does. Every session occupies
+ *  two or three consecutive rows -- the id line, an optional cwd line, and the captions
+ *  line -- so the mapping is a walk, not arithmetic. Row 3 is the first session line:
+ *  border, title, separator come first. */
+export function sessionRowAt(
+  rowOff: number,
+  sessions: SessionHistoryEntry[],
+): { idx: number; action: SessionRowAction } | null {
+  if (sessions.length === 0) return null;
   let row = 3;
   for (let i = 0; i < sessions.length; i++) {
-    if (rowOff === row) return i;
+    if (rowOff === row) return { idx: i, action: 'copy' };
     row++;
     if (sessions[i].cwd) {
-      if (rowOff === row) return i;
+      if (rowOff === row) return { idx: i, action: 'copy' };
       row++;
     }
+    if (rowOff === row) return { idx: i, action: 'captions' };
+    row++;
   }
-  return -1;
+  return null;
 }
