@@ -1,31 +1,25 @@
 /**
- * Name the sessions nobody named.
+ * Name a Claude session after what it is actually about.
  *
- * A session without a topic is unfindable: the resume picker lists topics, the
- * dashboard and phone cards show a blank line, and `d`-adjacent tooling has
- * nothing to call it. Topics were manual, so most sessions never got one.
+ * A session without a topic is unfindable: the resume picker lists sessions BY
+ * topic, and the dashboard and phone cards show a blank line. Naming was manual,
+ * so most sessions never got one.
  *
- * This runs OUTSIDE the sessions, on a timer. A session cannot be relied on to
- * title itself — the ones most likely to stay untitled are exactly the ones
- * nobody is asking anything of. It reads what a session was about (the same
- * digest the picker's `e` key summarizes: the user's own turns, plus the spoken
- * caption log when there is one), asks a small model for two to four words, and
- * writes it to the durable store keyed by the claude session id.
+ * This is a COMMAND, never a schedule. It runs when you ask and it always
+ * overwrites — asking for a name is the whole signal, so there is no ledger of
+ * "ours versus yours" and no rule about leaving an existing topic alone.
+ * Nothing here ever runs on its own.
  *
- * What it will never do is overwrite a topic a human set. It keeps a ledger of
- * the topics it wrote; a stored topic that does not match its ledger entry was
- * set by hand, and is left alone forever. Its own topics it will refresh once a
- * session has grown well past what it saw — a session named after its first ten
- * turns is misnamed by turn two hundred.
+ * The material is the same digest the resume picker's `e` key summarizes: the
+ * user's own turns (head and tail, clipped) plus the spoken caption log when
+ * there is one. A small model turns that into two to four words, stored durably
+ * against the claude session id — the id that survives a resume.
  *
- *   tsx autoTopic.ts                  # title every untitled recent session
- *   tsx autoTopic.ts --dry-run        # print what it would set, write nothing
- *   tsx autoTopic.ts --session <id>   # one session, ignoring the age cutoff
- *   tsx autoTopic.ts --force          # re-title even a topic it did not write
+ *   tsx autoTopic.ts --session <id>   # name one session
+ *   tsx autoTopic.ts --active         # name every session running right now
+ *   tsx autoTopic.ts --active --dry-run
  */
 import { spawnSync } from "child_process";
-import { readFileSync, writeFileSync, renameSync, mkdirSync } from "fs";
-import { dirname } from "path";
 import {
   loadAllSessions,
   readTopics,
@@ -40,45 +34,14 @@ import {
 const CLAUDE = "/root/.local/bin/claude";
 /** Naming three words is not a job for a large model. */
 const MODEL = "haiku";
-/** Topics this job wrote, so a hand-set topic can be told from one of ours. */
-const LEDGER = "/opt/automateLinux/data/dashboard/auto-topics.json";
 const DASHBOARD_PORT = process.env.CLAUDE_DASHBOARD_PORT || "3007";
 
-/** Below this, there is nothing to name yet — "hi" and a stray question. */
-const MIN_TURNS = 3;
-/** Dead sessions do not need names. Two days covers anything still in play. */
-const MAX_AGE_DAYS = 2;
-/** A slow scan competing with live work is worse than a scan that finishes later. */
-const MAX_PER_RUN = 8;
-/** Re-title one of ours once the session has grown this many times over. */
-const REFRESH_FACTOR = 3;
+/** Nothing to name in an empty session — say so rather than inventing one. */
+const MIN_TURNS = 1;
 const NAMING_TIMEOUT_MS = 90_000;
 /** A topic has to fit a phone card at a glance. */
 const MAX_TOPIC_CHARS = 40;
 const MAX_TOPIC_WORDS = 6;
-
-interface LedgerEntry {
-  /** Exactly what we wrote — a stored topic differing from this was set by hand. */
-  topic: string;
-  /** Turn count the name was derived from, for the refresh test. */
-  userTurns: number;
-}
-
-function readLedger(): Record<string, LedgerEntry> {
-  try {
-    return JSON.parse(readFileSync(LEDGER, "utf8")) as Record<string, LedgerEntry>;
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
-    return {};
-  }
-}
-
-function writeLedger(ledger: Record<string, LedgerEntry>): void {
-  mkdirSync(dirname(LEDGER), { recursive: true });
-  const tmp = `${LEDGER}.tmp`;
-  writeFileSync(tmp, JSON.stringify(ledger, null, 2));
-  renameSync(tmp, LEDGER);
-}
 
 /**
  * The naming prompt.
@@ -147,14 +110,30 @@ function namingPrompt(
  * because a bad name looks set and nobody revisits it.
  */
 function askForTopic(prompt: string): string | null {
+  // A headless `claude` is itself a Claude session: it fires the same hooks, and
+  // the dashboard resolves those to a registry row from the environment. Run it
+  // with ours inherited and the child CLAIMS this session's row — the row starts
+  // reporting the throwaway naming run as the session it holds, and the real one
+  // disappears from the list. Measured, not theorised: three ghost ids in
+  // /opt/dev/automateLinuxTerminal's project dir before this scrub, and `--active`
+  // dutifully named them. Same class as the ptyxis-agent env leak.
+  const env: Record<string, string> = {};
+  for (const [k, v] of Object.entries(process.env)) {
+    if (v === undefined) continue;
+    if (k === "AUTOMATE_LINUX_DASHBOARD_SESSION") continue; // the row-claiming one
+    if (k.startsWith("CLAUDE_") || k === "CLAUDECODE") continue;
+    env[k] = v;
+  }
+
   const res = spawnSync(CLAUDE, ["-p", "--model", MODEL, prompt], {
-    // `claude -p` waits on stdin; a timer job has none to give it.
+    // `claude -p` waits on stdin; nothing here has any to give it.
     stdio: ["ignore", "pipe", "pipe"],
     encoding: "utf8",
     timeout: NAMING_TIMEOUT_MS,
-    // Its own directory, not the session's: loading a project's CLAUDE.md into a
-    // three-word naming call costs seconds and tokens for nothing.
-    cwd: dirname(new URL(import.meta.url).pathname),
+    env,
+    // Somewhere with no CLAUDE.md to load into a three-word naming call, and no
+    // session working there for the dashboard to confuse this run with.
+    cwd: "/tmp",
   });
   if (res.status !== 0 || !res.stdout) return null;
 
@@ -204,37 +183,67 @@ function storeTopic(sessionId: string, topic: string): boolean {
   }
 }
 
+/**
+ * The sessions running right now, straight from the dashboard registry — the
+ * same list its cards show. Not "recently modified transcripts": a session that
+ * ended is not a session you are working in, and naming the archive was never
+ * the ask.
+ *
+ * Throws rather than returning an empty list if the dashboard cannot be reached.
+ * "Nothing is running" and "I could not look" must not produce the same silence.
+ */
+function activeSessionIds(): string[] {
+  const res = spawnSync("curl", ["-sS", "-m", "10", `http://localhost:${DASHBOARD_PORT}/api/claude-sessions`], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  if (res.status !== 0) {
+    throw new Error(`dashboard unreachable on port ${DASHBOARD_PORT}: ${(res.stderr || "").trim()}`);
+  }
+  const list = JSON.parse(res.stdout) as { claudeSessionId?: string }[];
+  return [...new Set(list.map((s) => s.claudeSessionId).filter((id): id is string => !!id))];
+}
+
 const args = process.argv.slice(2);
 const dryRun = args.includes("--dry-run");
-const force = args.includes("--force");
+const active = args.includes("--active");
 const onlyIdx = args.indexOf("--session");
 const only = onlyIdx >= 0 ? args[onlyIdx + 1] : null;
 
-const cutoff = only ? 0 : Date.now() - MAX_AGE_DAYS * 24 * 60 * 60 * 1000;
-const ledger = readLedger();
-// Every topic in the store, not just the recent ones: a name is only unique if
-// it is unique against sessions the picker can still list.
+if (!only && !active) {
+  console.error("usage: autoTopic.ts --session <id> | --active   [--dry-run]");
+  process.exit(64);
+}
+
+const wanted = new Set(only ? [only] : activeSessionIds());
+if (!wanted.size) {
+  console.log("no sessions are running");
+  process.exit(0);
+}
+
+// Every topic in the store, not just the ones being named: a name is only unique
+// if it is unique against every session the picker can still list.
 const allTopics = readTopics();
+// Transcripts are matched by id, so the whole archive is in scope for the lookup
+// even though only the wanted ids are named.
+const sessions = loadAllSessions().filter((s) => wanted.has(s.sessionId));
+
+for (const id of wanted) {
+  if (!sessions.some((s) => s.sessionId === id)) {
+    console.log(`${id.slice(0, 8)}: no transcript on this machine — skipped`);
+  }
+}
+
 let named = 0;
-let ledgerDirty = false;
+let failed = 0;
 
-for (const session of loadAllSessions(cutoff)) {
-  if (only && session.sessionId !== only) continue;
-  if (named >= MAX_PER_RUN) {
-    console.log(`stopping at ${MAX_PER_RUN} this run — the rest are named next run`);
-    break;
-  }
-
-  const mine = ledger[session.sessionId];
-  if (session.topic && !force) {
-    // Someone typed this one. Ours we may refresh, but only once the session has
-    // outgrown the material the name came from.
-    if (!mine || mine.topic !== session.topic) continue;
-  }
-
+for (const session of sessions) {
   const digest = readSessionDigest(session.file);
-  if (digest.userTurns < MIN_TURNS) continue;
-  if (session.topic && !force && mine && digest.userTurns < mine.userTurns * REFRESH_FACTOR) continue;
+  if (digest.userTurns < MIN_TURNS) {
+    console.log(`${session.sessionId.slice(0, 8)}: nothing said yet — nothing to name`);
+    failed++;
+    continue;
+  }
 
   let spoken: SpokenLine[] = [];
   try {
@@ -243,8 +252,9 @@ for (const session of loadAllSessions(cutoff)) {
     spoken = [];
   }
 
-  // Every name held by a different session, so the model can be told what not to
-  // reuse — and so a collision it produces anyway can be caught here.
+  // Every name held by a DIFFERENT session, so the model can be told what not to
+  // reuse — and so a collision it produces anyway can be caught here. A session's
+  // own current name is not in the list: replacing a name with itself is fine.
   const taken = [...allTopics.entries()]
     .filter(([id, t]) => id !== session.sessionId && t)
     .map(([, t]) => t);
@@ -252,21 +262,21 @@ for (const session of loadAllSessions(cutoff)) {
 
   let topic = askForTopic(namingPrompt(session, digest, spoken, taken));
   if (topic && takenLower.has(topic.toLowerCase())) {
-    // One retry naming the clash outright. If it collides again the session
-    // stays untitled and the next run tries afresh — a duplicate topic is worse
-    // than a blank one, because the picker then lists two rows nobody can tell
-    // apart.
+    // One retry naming the clash outright. If it collides again the topic is left
+    // as it was — a duplicate is worse than a stale name, because the picker then
+    // lists two rows nobody can tell apart.
     topic = askForTopic(
       `${namingPrompt(session, digest, spoken, taken)}\n\nYou answered "${topic}", which is one of the taken names. Answer with a different one.`,
     );
     if (topic && takenLower.has(topic.toLowerCase())) topic = null;
   }
   if (!topic) {
-    console.log(`${session.sessionId.slice(0, 8)}: no usable name, left untitled`);
+    console.log(`${session.sessionId.slice(0, 8)}: no usable name — left as it was`);
+    failed++;
     continue;
   }
 
-  const was = session.topic ? ` (was "${session.topic}")` : "";
+  const was = session.topic && session.topic !== topic ? ` (was "${session.topic}")` : "";
   if (dryRun) {
     console.log(`${session.sessionId.slice(0, 8)}: would set "${topic}"${was}`);
     named++;
@@ -274,18 +284,15 @@ for (const session of loadAllSessions(cutoff)) {
   }
 
   if (!storeTopic(session.sessionId, topic)) {
-    console.log(`${session.sessionId.slice(0, 8)}: store refused "${topic}" — left untitled`);
+    console.log(`${session.sessionId.slice(0, 8)}: store refused "${topic}" — left as it was`);
+    failed++;
     continue;
   }
   allTopics.set(session.sessionId, topic);
-  ledger[session.sessionId] = { topic, userTurns: digest.userTurns };
-  ledgerDirty = true;
   named++;
   console.log(`${session.sessionId.slice(0, 8)}: "${topic}"${was}`);
 }
 
-if (ledgerDirty) writeLedger(ledger);
-if (only && named === 0) {
-  console.error(`nothing named for ${only} — too few turns, already titled by hand, or no usable name`);
-  process.exit(1);
-}
+// A command that names nothing must not look like one that worked.
+if (named === 0) process.exit(1);
+if (failed) console.log(`${named} named, ${failed} left unnamed`);
