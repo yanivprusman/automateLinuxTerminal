@@ -258,6 +258,29 @@ export function notifySessionEnded(): void {
   }).catch(() => {});
 }
 
+/**
+ * The session a claude process is running RIGHT NOW, published per-pid by the
+ * `notify-dashboard` hook on every event.
+ *
+ * This used to be read off the process's own command line (`--session-id`), which
+ * is only the id it was LAUNCHED with. `/resume` swaps the running session without
+ * rewriting the command line or the environment, so from the first resume onward
+ * the flag named a session with no transcript: the tab filed its topic under the
+ * live id and read it back under the dead one, and the bar stayed empty while
+ * every other surface showed the name. A hook fires under the live id, so it is
+ * the only witness that survives a resume.
+ *
+ * 'unknown' means the process has not fired a hook yet (a second at startup, or
+ * hooks disabled) — never a guess at some other session's id.
+ */
+function liveSessionOf(claudePid: number): string {
+  try {
+    const raw = readFileSync(`/tmp/claude-live-session-${claudePid}.json`, 'utf-8');
+    const sid = (JSON.parse(raw) as { sessionId?: unknown }).sessionId;
+    return typeof sid === 'string' && sid ? sid : 'unknown';
+  } catch { return 'unknown'; }
+}
+
 export function detectClaudeSession(shellPid: number): ClaudeSessionInfo | null {
   let pids: number[];
   try {
@@ -273,18 +296,8 @@ export function detectClaudeSession(shellPid: number): ClaudeSessionInfo | null 
         const stat = readFileSync(`/proc/${current}/stat`, 'utf-8');
         const ppid = parseInt(stat.split(') ')[1]?.split(' ')[1] || '0');
         if (ppid === shellPid) {
-          let sessionId = 'unknown';
+          const sessionId = liveSessionOf(pid);
           let cwd: string | null = null;
-          try {
-            const cmdline = readFileSync(`/proc/${pid}/cmdline`, 'utf-8');
-            const args = cmdline.split('\0').filter(Boolean);
-            for (let j = 0; j < args.length; j++) {
-              if ((args[j] === '--session-id' || args[j] === '-r') && args[j + 1]) {
-                sessionId = args[j + 1];
-                break;
-              }
-            }
-          } catch {}
           try {
             cwd = readFileSync(`/proc/${pid}/cwd`, 'utf-8').replace(/\0/g, '');
           } catch {

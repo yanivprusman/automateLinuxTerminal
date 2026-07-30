@@ -171,12 +171,23 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
     // keyed by "the session in this tab" — the window title, the topic read and
     // write, the pid-topic file — reads it back through currentSessionId(), so
     // they can never disagree about which session this tab is showing.
+    // What the window WEARS. A session id is unreadable — a row of tabs saying
+    // `claude-c96f8e87-…` tells the user nothing about which is which — so a named
+    // session wears its NAME, and only an unnamed one falls back to its handle.
+    // This does not cost "focus this session's terminal" its discriminator: the
+    // dashboard resolver counts a session's topic among the titles it may
+    // legitimately be showing (terminal-window-match.ts::sessionWindowTitles), and
+    // the window claim published above is consulted before any title anyway.
+    const pinnedTitle = () => claudeTitle ? (topicRef.current || claudeTitle) : "";
     const syncClaudeTitle = () => {
       const info = detectClaudeSession(shell.pid);
       noteLiveSessionId(info?.sessionId);
       claudeTitle = info && info.sessionId !== 'unknown' ? `claude-${info.sessionId}`
                   : SESSION_ID ? `claude-${SESSION_ID}` : "";
-      setHostTitle(claudeTitle || childTitle);
+      // Runs every 5s, so a topic set or cleared anywhere — this tab's menu, the
+      // dashboard card, the phone, the set-topic skill — reaches the title too
+      // without every one of those paths having to know about the window.
+      setHostTitle(pinnedTitle() || childTitle);
     };
     syncClaudeTitle();
     const titleSyncId = setInterval(syncClaudeTitle, 5000);

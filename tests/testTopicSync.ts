@@ -35,7 +35,8 @@ const FAKE = "11111111-2222-3333-4444-555555555555";
 noteLiveSessionId(FAKE);
 check("live claude id wins over an empty SESSION_ID", currentSessionId(), FAKE);
 
-// 3. detectClaudeSession says 'unknown' when the command line carries no id.
+// 3. detectClaudeSession says 'unknown' when no hook has published an id for the
+//    process yet (the first second of a session, or hooks disabled).
 //    Filing a topic under the literal string "unknown" would pool every such
 //    tab's topic into one shared bucket.
 noteLiveSessionId("unknown");
