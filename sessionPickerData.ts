@@ -17,6 +17,16 @@ import { homedir } from "os";
 
 /** Dashboard's durable per-session metadata (lib/state-dir.ts → STATE_DIR). */
 const META_FILE = "/opt/automateLinux/data/dashboard/claude-session-meta.json";
+/**
+ * The voice stack's caption log — every line spoken by either side, tagged with
+ * the session it belongs to (see the claude-voice repo's `say`).
+ *
+ * This is the single best account of a session that exists. Each spoken line was
+ * composed to lead with the outcome and be understood without context, so the log
+ * is already a condensed narrative of what happened — where the transcript is raw
+ * and 70MB, this is the distilled version, both sides, in under a megabyte.
+ */
+const VOICE_HISTORY = `${homedir()}/.claude/voice-history.jsonl`;
 const PROJECTS_DIR = `${homedir()}/.claude/projects`;
 /** cwd sits in the opening lines of a transcript — measured under 8KB in every sampled file. */
 const HEAD_BYTES = 128 * 1024;
@@ -51,6 +61,67 @@ export interface SessionDigest {
 const SAMPLE_HEAD = 30;
 const SAMPLE_TAIL = 30;
 const SAMPLE_TURN_CHARS = 400;
+/** Spoken lines are longer than a typed prompt and worth more — clip less, keep the tail. */
+const SPOKEN_MAX = 40;
+const SPOKEN_CHARS = 1200;
+
+/**
+ * Clip on a sentence boundary, never mid-word.
+ *
+ * A ragged edge is not just ugly here: cutting a caption mid-sentence made the
+ * summarizer end with "the analysis cut off mid-sentence, so it's unclear what
+ * was finished" — it reported the damage instead of the session. Text handed to
+ * a model should never look truncated, or the truncation becomes the story.
+ */
+function clipToSentence(text: string, max: number): string {
+  if (text.length <= max) return text;
+  const cut = text.slice(0, max);
+  const stop = Math.max(cut.lastIndexOf(". "), cut.lastIndexOf("! "), cut.lastIndexOf("? "));
+  return stop > max * 0.5 ? cut.slice(0, stop + 1) : `${cut.slice(0, cut.lastIndexOf(" "))}.`;
+}
+
+/** One line from the voice log: what was said aloud, and by whom. */
+export interface SpokenLine {
+  role: string;
+  text: string;
+}
+
+/**
+ * The spoken account of one session, oldest first.
+ *
+ * Absent for plenty of sessions — silent runs, machines without the voice stack —
+ * and that is a normal empty result, not an error: the summary is simply built
+ * from the typed turns alone. Only an unreadable-but-present log is a real fault.
+ */
+export function readSpokenLines(sessionId: string): SpokenLine[] {
+  let raw: string;
+  try {
+    raw = readFileSync(VOICE_HISTORY, "utf8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw err;
+  }
+
+  const lines: SpokenLine[] = [];
+  for (const line of raw.split("\n")) {
+    // The session id appears in every entry that matters; skip the JSON.parse
+    // for the ~99% of the log belonging to other sessions.
+    if (!line || !line.includes(sessionId)) continue;
+    let entry: any;
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (entry?.session !== sessionId) continue;
+    const text = typeof entry.text === "string" ? entry.text.replace(/\s+/g, " ").trim() : "";
+    if (!text) continue;
+    lines.push({ role: entry.role === "user" ? "user" : "claude", text: clipToSentence(text, SPOKEN_CHARS) });
+  }
+
+  // The tail is what a session ended up doing; the opening is already in the typed turns.
+  return lines.slice(-SPOKEN_MAX);
+}
 
 export interface PickerData {
   sessions: TopicSession[];

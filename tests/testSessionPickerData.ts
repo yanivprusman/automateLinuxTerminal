@@ -5,7 +5,7 @@
 // the `→` key shows and speaks).
 //
 //   npx tsx tests/testSessionPickerData.ts
-import { loadTopicSessions, readSessionDigest } from "../sessionPickerData.js";
+import { loadTopicSessions, readSessionDigest, readSpokenLines } from "../sessionPickerData.js";
 
 const { sessions, unavailable } = loadTopicSessions();
 
@@ -59,6 +59,21 @@ if (digest.sample.length > 60 || digest.sample.some((t) => t.length > 400)) {
   process.exit(1);
 }
 
+// Captions are the only source carrying outcomes rather than requests, so a
+// silent join (schema drift in the voice log, a changed session key) would
+// quietly return summaries to the request-only quality the user rejected.
+const spokenCounts = sessions.slice(0, 20).map((s) => readSpokenLines(s.sessionId).length);
+const withSpoken = spokenCounts.filter((n) => n > 0).length;
+if (withSpoken === 0) {
+  console.error("FAIL: not one of the 20 newest sessions joined to a caption — the voice-log join is broken");
+  process.exit(1);
+}
+if (spokenCounts.some((n) => n > 40)) {
+  console.error("FAIL: caption sample exceeds its cap — prompt size is unbounded");
+  process.exit(1);
+}
+
+console.log(`captions: ${withSpoken}/20 newest sessions have spoken lines`);
 console.log(`newest: "${newest.topic}" in ${newest.cwd}`);
 console.log(`digest: ${digest.userTurns} user turns, starts "${digest.first.replace(/\s+/g, " ").slice(0, 60)}…"`);
 console.log("PASS");

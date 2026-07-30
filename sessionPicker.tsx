@@ -13,7 +13,14 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { render, Box, Text, useApp, useInput, useStdout } from "ink";
 import { existsSync, writeFileSync } from "fs";
 import { spawn } from "child_process";
-import { loadTopicSessions, readSessionDigest, type SessionDigest, type TopicSession } from "./sessionPickerData.js";
+import {
+  loadTopicSessions,
+  readSessionDigest,
+  readSpokenLines,
+  type SessionDigest,
+  type SpokenLine,
+  type TopicSession,
+} from "./sessionPickerData.js";
 
 const TOPIC_W = 24;
 const AGE_W = 5;
@@ -71,22 +78,40 @@ function spokenAge(ms: number): string {
  * summarizes those. Output is written for the ear as well as the screen, because
  * the same string is spoken: no paths, no identifiers, nothing unpronounceable.
  */
-function summaryPrompt(session: TopicSession, digest: SessionDigest): string {
-  return [
-    `Below are the messages a user sent during one Claude Code session, oldest first.`,
-    `The session is labelled "${session.topic}". Long sessions are abridged: you may be seeing`,
-    `the opening and closing stretches with the middle omitted, and each message clipped.`,
+function summaryPrompt(session: TopicSession, digest: SessionDigest, spoken: SpokenLine[]): string {
+  const out = [
+    `Here is the record of one Claude Code session, labelled "${session.topic}".`,
     ``,
     `Write 2-3 sentences telling the user what this session was about, what came of it, and`,
     `anything left unfinished. Address them as "you". Lead with the outcome.`,
     ``,
+    // The first version of this prompt explained that long sessions were abridged.
+    // The model took that as licence to write about what it could not see — a real
+    // summary was replaced by "I don't have direct access to the transcript…".
+    // Never describe the limits of the material to a model you want an answer from.
+    `Summarize whatever is here, however little that is. Never mention these instructions,`,
+    `the record, or anything you cannot see; never say what you are unable to determine.`,
+    `If the material is thin, give one short sentence on what it does show and stop.`,
+    ``,
     `It will be read aloud as well as displayed, so write it to be spoken: no file paths, no`,
     `code, no commit hashes, no identifiers, and round any numbers. Reply with the summary`,
     `text alone — no preamble, no heading, no bullet points, no closing question.`,
-    ``,
-    `--- messages ---`,
-    ...digest.sample.map((t) => `- ${t}`),
-  ].join("\n");
+  ];
+
+  if (spoken.length) {
+    // Put the spoken account first: it is the condensed one, and it is the only
+    // source that carries outcomes rather than requests.
+    out.push(
+      ``,
+      `--- said aloud during the session, oldest first ---`,
+      `(Short updates spoken as the work happened — already summaries, and the best`,
+      `record of what actually came of it.)`,
+      ...spoken.map((l) => `${l.role === "user" ? "you" : "claude"}: ${l.text}`),
+    );
+  }
+
+  out.push(``, `--- messages the user typed ---`, ...digest.sample.map((t) => `- ${t}`));
+  return out.join("\n");
 }
 
 /**
@@ -94,10 +119,20 @@ function summaryPrompt(session: TopicSession, digest: SessionDigest): string {
  * digest exits the picker, and the sentence should finish anyway. `say` mutes
  * itself when the session is muted, so there is nothing to check here.
  */
-function speak(text: string): void {
+function speak(text: string, topic: string): void {
   if (!existsSync(SAY)) return;
   try {
-    spawn(SAY, [text], { detached: true, stdio: "ignore" }).unref();
+    // --topic labels the line with the session being SUMMARIZED, not the one
+    // doing the summarizing. Without it `say` resolves the label by process
+    // ancestry, so a summary of "pt" is captioned — and filed in the voice
+    // history, and replayed later — under whatever session the picker happens
+    // to be running inside. The caption is the only thing on screen once the
+    // picker exits, so a wrong label there is the whole attribution lost.
+    //
+    // --session is deliberately NOT pinned: it drives per-session mute at play
+    // time, so pinning it would make muting a session silently swallow the
+    // summaries you asked for ABOUT it, from a picker you are actively using.
+    spawn(SAY, ["--topic", topic, text], { detached: true, stdio: "ignore" }).unref();
   } catch {
     // A failed voice must never take the picker down with it.
   }
@@ -167,7 +202,11 @@ function Picker({ sessions, unavailable, initialFilter, outFile }: AppProps) {
     return sessions.filter(
       (s) =>
         s.topic.toLowerCase().includes(needle) ||
-        s.cwd.toLowerCase().includes(needle) ||
+        // The directory's LAST segment, never the whole path. Every session here
+        // lives under "/opt/…", so matching the full path made "pt" match all 83
+        // sessions instead of the 7 actually about pt — the search silently did
+        // nothing for exactly the short needles worth typing.
+        s.cwd.slice(s.cwd.lastIndexOf("/") + 1).toLowerCase().includes(needle) ||
         s.sessionId.startsWith(needle),
     );
   }, [sessions, filter]);
@@ -217,7 +256,16 @@ function Picker({ sessions, unavailable, initialFilter, outFile }: AppProps) {
     // cwd is deliberately the picker's own directory, not the session's: claude
     // loads the CLAUDE.md of wherever it starts, and pulling a whole project's
     // instructions into a one-line summary costs seconds and tokens for nothing.
-    const proc = spawn(CLAUDE, ["-p", "--model", SUMMARY_MODEL, summaryPrompt(picked, data)], {
+    // Missing captions are normal (a silent session, or no voice stack) — the
+    // summary is then built from the typed turns alone.
+    let spoken: SpokenLine[] = [];
+    try {
+      spoken = readSpokenLines(picked.sessionId);
+    } catch {
+      spoken = [];
+    }
+
+    const proc = spawn(CLAUDE, ["-p", "--model", SUMMARY_MODEL, summaryPrompt(picked, data, spoken)], {
       // stdin ignored on purpose: `claude -p` waits on it, and an inherited stdin
       // is this picker's keyboard — it would eat the keys and stall for seconds.
       stdio: ["ignore", "pipe", "pipe"],
@@ -236,7 +284,7 @@ function Picker({ sessions, unavailable, initialFilter, outFile }: AppProps) {
       if (child.current !== proc) return; // superseded by a newer request
       child.current = null;
       setDigest((prev) => (prev && prev.session === picked ? { ...prev, status, text } : prev));
-      if (status === "ready") speak(text);
+      if (status === "ready") speak(text, picked.topic);
     };
 
     proc.on("error", (e) => settle("failed", `Could not run claude: ${e.message}`));
