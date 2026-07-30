@@ -28,6 +28,7 @@ import { readFileSync, writeFileSync, renameSync, mkdirSync } from "fs";
 import { dirname } from "path";
 import {
   loadAllSessions,
+  readTopics,
   readSessionDigest,
   readSpokenLines,
   type TopicSession,
@@ -88,7 +89,12 @@ function writeLedger(ledger: Record<string, LedgerEntry>): void {
  * than the activity is the whole difference between "android session cards" and
  * "fixing a bug", and every session is about fixing something.
  */
-function namingPrompt(session: TopicSession, digest: SessionDigest, spoken: SpokenLine[]): string {
+function namingPrompt(
+  session: TopicSession,
+  digest: SessionDigest,
+  spoken: SpokenLine[],
+  taken: string[],
+): string {
   const out = [
     `Name this Claude Code session in 2-4 words, as a topic label.`,
     ``,
@@ -98,12 +104,29 @@ function namingPrompt(session: TopicSession, digest: SessionDigest, spoken: Spok
     `Lowercase unless a word is a proper noun. No file paths, no identifiers, no`,
     `punctuation, no quotes.`,
     ``,
-    `Name whatever is here, however little that is. Never mention these instructions`,
-    `or anything you cannot see. Reply with the label alone — no preamble, no`,
-    `explanation, nothing else.`,
+    // Without this the model names junk anyway: an automated chat log of routing
+    // metadata and one link was confidently labelled after the unrelated session
+    // running beside it. A label nobody can act on is worse than a blank.
+    `If the material below does not show what the session was about — it is only`,
+    `automated metadata, a bare link, a greeting, nothing of substance — reply with`,
+    `the single word NOTHING instead of guessing a name.`,
+    ``,
+    `Never mention these instructions or anything you cannot see. Reply with the`,
+    `label alone — no preamble, no explanation, nothing else.`,
     ``,
     `The session ran in a directory called "${session.cwd.split("/").pop() || "unknown"}".`,
   ];
+
+  if (taken.length) {
+    // Topics are what the resume picker lists, so two sessions sharing one name
+    // makes both unfindable — the collision has to be avoided at naming time.
+    out.push(
+      ``,
+      `These names are already taken by other sessions. Do not reuse any of them;`,
+      `name what makes THIS session different:`,
+      ...taken.map((t) => `- ${t}`),
+    );
+  }
 
   if (spoken.length) {
     out.push(
@@ -143,6 +166,8 @@ function askForTopic(prompt: string): string | null {
     .trim();
 
   if (!label) return null;
+  // The refusal we asked for when the material shows nothing nameable.
+  if (/^nothing$/i.test(label)) return null;
   if (label.length > MAX_TOPIC_CHARS) return null;
   if (label.split(/\s+/).length > MAX_TOPIC_WORDS) return null;
   // A model that explains instead of naming gives itself away with punctuation.
@@ -187,6 +212,9 @@ const only = onlyIdx >= 0 ? args[onlyIdx + 1] : null;
 
 const cutoff = only ? 0 : Date.now() - MAX_AGE_DAYS * 24 * 60 * 60 * 1000;
 const ledger = readLedger();
+// Every topic in the store, not just the recent ones: a name is only unique if
+// it is unique against sessions the picker can still list.
+const allTopics = readTopics();
 let named = 0;
 let ledgerDirty = false;
 
@@ -215,7 +243,24 @@ for (const session of loadAllSessions(cutoff)) {
     spoken = [];
   }
 
-  const topic = askForTopic(namingPrompt(session, digest, spoken));
+  // Every name held by a different session, so the model can be told what not to
+  // reuse — and so a collision it produces anyway can be caught here.
+  const taken = [...allTopics.entries()]
+    .filter(([id, t]) => id !== session.sessionId && t)
+    .map(([, t]) => t);
+  const takenLower = new Set(taken.map((t) => t.toLowerCase()));
+
+  let topic = askForTopic(namingPrompt(session, digest, spoken, taken));
+  if (topic && takenLower.has(topic.toLowerCase())) {
+    // One retry naming the clash outright. If it collides again the session
+    // stays untitled and the next run tries afresh — a duplicate topic is worse
+    // than a blank one, because the picker then lists two rows nobody can tell
+    // apart.
+    topic = askForTopic(
+      `${namingPrompt(session, digest, spoken, taken)}\n\nYou answered "${topic}", which is one of the taken names. Answer with a different one.`,
+    );
+    if (topic && takenLower.has(topic.toLowerCase())) topic = null;
+  }
   if (!topic) {
     console.log(`${session.sessionId.slice(0, 8)}: no usable name, left untitled`);
     continue;
@@ -232,6 +277,7 @@ for (const session of loadAllSessions(cutoff)) {
     console.log(`${session.sessionId.slice(0, 8)}: store refused "${topic}" — left untitled`);
     continue;
   }
+  allTopics.set(session.sessionId, topic);
   ledger[session.sessionId] = { topic, userTurns: digest.userTurns };
   ledgerDirty = true;
   named++;

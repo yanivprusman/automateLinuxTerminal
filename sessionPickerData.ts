@@ -242,7 +242,7 @@ export function readSessionDigest(file: string): SessionDigest {
  * gitignored, so a fresh machine simply has none). A corrupt or unreadable one
  * is a real fault and still throws.
  */
-function readTopics(): Map<string, string> {
+export function readTopics(): Map<string, string> {
   let meta: Record<string, { customTitle?: string }>;
   try {
     meta = JSON.parse(readFileSync(META_FILE, "utf8")) as Record<string, { customTitle?: string }>;
