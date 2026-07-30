@@ -39,6 +39,66 @@ export function writeMetadata(shellPid: number): void {
   writeFileSync(METADATA_FILE, JSON.stringify(meta, null, 2));
 }
 
+// ── Which host window is this? ────────────────────────────────────────────────
+// "Focus this session's terminal" used to be answered by matching the window
+// title `claude-<sessionId>`. A Ptyxis window OUTLIVES a session that was killed
+// rather than exited (the dashboard's kill, a crash) and keeps that title
+// frozen, so after a resume TWO windows carry it -- and the daemon lists windows
+// in most-recently-used order, so whichever the user touched last won. Focus
+// then landed in a dead terminal.
+//
+// Only the live host can answer without guessing: it briefly titles its window
+// with a nonce nobody else can be showing, asks the daemon which window carries
+// it, and publishes that id. A dead host publishes nothing, so it can never be
+// mistaken for this one.
+
+/** Ask the daemon for the id of the window whose title is exactly `title`. */
+function windowIdByTitle(title: string): string {
+  try {
+    const raw = execFileSync('daemon', ['send', 'listWindows'], { encoding: 'utf-8', timeout: 3000 });
+    const wins = JSON.parse(raw) as { id: number; title?: string }[];
+    const hits = wins.filter(w => w.title === title);
+    // A nonce is unique by construction; more than one hit means we are not
+    // looking at what we think we are, so claim nothing.
+    return hits.length === 1 ? String(hits[0].id) : '';
+  } catch { return ''; }
+}
+
+export function writeWindowId(windowId: string): void {
+  if (!METADATA_FILE) return;
+  try {
+    let meta: Record<string, unknown> = {};
+    try { meta = JSON.parse(readFileSync(METADATA_FILE, 'utf-8')); } catch {}
+    meta.windowId = windowId;
+    writeFileSync(METADATA_FILE, JSON.stringify(meta, null, 2));
+  } catch {}
+}
+
+/**
+ * Claim this terminal's host window and publish its id into the metadata file.
+ * `setTitle` writes an OSC 2 title to the hosting terminal; `restoreTitle` puts
+ * the session's real title back. Resolves to the claimed id, or '' when the
+ * daemon or the window extension can't answer (the caller keeps the old id).
+ */
+export async function claimHostWindow(
+  setTitle: (t: string) => void,
+  restoreTitle: () => void,
+): Promise<string> {
+  const nonce = `claude-starting-${process.pid}`;   // unique: one host per pid
+  setTitle(nonce);
+  try {
+    // GNOME sees the new title a frame or two later; poll rather than sleep long.
+    for (let i = 0; i < 20; i++) {
+      await new Promise(r => setTimeout(r, 100));
+      const id = windowIdByTitle(nonce);
+      if (id) return id;
+    }
+    return '';
+  } finally {
+    restoreTitle();
+  }
+}
+
 // Also keyed by THIS terminal's own pid, not the Claude session id. The session-id file
 // only exists when the terminal was launched with CLAUDE_SESSION_ID preset; a tab started
 // manually has none, so its topic was invisible. The Claude Voice `say` command finds this

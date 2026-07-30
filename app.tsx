@@ -8,7 +8,7 @@ import xterm from "@xterm/headless";
 const { Terminal: XTerminal } = xterm;
 
 import type { Span, Line, Selection, ContextMenuState, SessionHistoryEntry } from "./types.js";
-import { SESSION_ID, LAUNCH_DIR, SCRIPT_LOG_FILE, writeMetadata, writeTopic, writePidTopic, propagateTopicToDashboard, fetchStoredTopic, cleanupMetadata, registerWithDashboard, notifySessionEnded, detectClaudeSession, isPidAlive } from "./session.js";
+import { SESSION_ID, LAUNCH_DIR, SCRIPT_LOG_FILE, writeMetadata, writeTopic, writePidTopic, propagateTopicToDashboard, fetchStoredTopic, cleanupMetadata, registerWithDashboard, notifySessionEnded, detectClaudeSession, isPidAlive, claimHostWindow, writeWindowId } from "./session.js";
 import { EMPTY_SPAN, spansEqual, normalizeSelection, readBufferRow, readBuffer } from "./buffer.js";
 import { SESSION_MENU_INNER, formatStopwatch, computeMenuLayout, sessionRowAt } from "./menu.js";
 import { ContextMenuOverlay } from "./ContextMenuOverlay.js";
@@ -175,6 +175,17 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
     };
     syncClaudeTitle();
     const titleSyncId = setInterval(syncClaudeTitle, 5000);
+
+    // Publish WHICH window hosts this session, so "focus this session's
+    // terminal" never has to guess between two windows showing the same
+    // `claude-<sessionId>` title (a killed session leaves its window open with
+    // the title frozen). Claimed once: a window id is unique among live windows,
+    // so it cannot go stale while we are alive, and the metadata file we wrote it
+    // to is liveness-filtered by our pid on the reading side.
+    if (SESSION_ID) {
+      claimHostWindow(setHostTitle, () => setHostTitle(claudeTitle || childTitle))
+        .then(id => { if (id) writeWindowId(id); });
+    }
 
     shell.onData((data: string) => {
       if (scriptLogStream) scriptLogStream.write(data);
