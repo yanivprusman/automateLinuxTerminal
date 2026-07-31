@@ -95,21 +95,47 @@ function windowIdByTitle(titles: string[]): string {
   } catch { return ''; }
 }
 
-export function writeWindowId(windowId: string): void {
-  if (!METADATA_FILE) return;
+// The claim is filed under the session the tab is showing RIGHT NOW, in its own
+// file, because the metadata file cannot carry it: that one exists only when the
+// launcher preset CLAUDE_SESSION_ID + CLAUDE_TMUX_SESSION, which no ordinary tab
+// has — so every session started by hand went back to being identified by window
+// title alone, the guess this mechanism exists to remove. Keying it on
+// currentSessionId() also means a `/resume` (which mints a new id without
+// restarting anything) re-files the claim under the id every other surface will
+// now be using.
+const claimFile = (sessionId: string) => `/tmp/claudeWindowClaim-${sessionId}.json`;
+
+let claimedWindowId = '';
+let claimedUnder = '';
+
+/** Publish (or re-file) this window's claim for the session the tab now shows. */
+export function publishWindowClaim(windowId?: string): void {
+  if (windowId) claimedWindowId = windowId;
+  const sid = currentSessionId();
+  if (!claimedWindowId || !sid || sid === claimedUnder) return;
   try {
-    let meta: Record<string, unknown> = {};
-    try { meta = JSON.parse(readFileSync(METADATA_FILE, 'utf-8')); } catch {}
-    meta.windowId = windowId;
-    writeFileSync(METADATA_FILE, JSON.stringify(meta, null, 2));
+    writeFileSync(claimFile(sid), JSON.stringify({
+      sessionId: sid, windowId: claimedWindowId, hostPid: process.pid,
+    }));
+    // One claim per host: the id we were filed under a moment ago names a session
+    // this tab is no longer showing, and leaving it would let a resumed session's
+    // dead id keep pointing at a live window.
+    if (claimedUnder) { try { unlinkSync(claimFile(claimedUnder)); } catch {} }
+    claimedUnder = sid;
   } catch {}
 }
 
+function removeWindowClaim(): void {
+  if (!claimedUnder) return;
+  try { unlinkSync(claimFile(claimedUnder)); } catch {}
+  claimedUnder = '';
+}
+
 /**
- * Claim this terminal's host window and publish its id into the metadata file.
- * `setTitle` writes an OSC 2 title to the hosting terminal; `restoreTitle` puts
- * the session's real title back. Resolves to the claimed id, or '' when the
- * daemon or the window extension can't answer (the caller keeps the old id).
+ * Work out WHICH window this terminal is running in. `setTitle` writes an OSC 2
+ * title to the hosting terminal; `restoreTitle` puts the session's real title
+ * back. Resolves to the window id, or '' when the daemon or the window extension
+ * can't answer — the caller then publishes nothing rather than a guess.
  */
 export async function claimHostWindow(
   setTitle: (t: string) => void,
@@ -160,6 +186,7 @@ export function writePidTopic(topic: string): void {
 export function cleanupMetadata(): void {
   try { if (METADATA_FILE) unlinkSync(METADATA_FILE); } catch {}
   try { unlinkSync(PID_TOPIC_FILE); } catch {}
+  removeWindowClaim();
 }
 
 // Persist the tab's topic into the session metadata so external tools (the Claude Voice

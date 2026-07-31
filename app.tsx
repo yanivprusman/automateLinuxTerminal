@@ -8,7 +8,7 @@ import xterm from "@xterm/headless";
 const { Terminal: XTerminal } = xterm;
 
 import type { Span, Line, Selection, ContextMenuState, SessionHistoryEntry } from "./types.js";
-import { SESSION_ID, LAUNCH_DIR, SCRIPT_LOG_FILE, writeMetadata, writeTopic, writePidTopic, propagateTopicToDashboard, fetchStoredTopic, readStoredTopic, cleanupMetadata, registerWithDashboard, notifySessionEnded, detectClaudeSession, noteLiveSessionId, isPidAlive, claimHostWindow, writeWindowId } from "./session.js";
+import { SESSION_ID, LAUNCH_DIR, SCRIPT_LOG_FILE, writeMetadata, writeTopic, writePidTopic, propagateTopicToDashboard, fetchStoredTopic, readStoredTopic, cleanupMetadata, registerWithDashboard, notifySessionEnded, detectClaudeSession, noteLiveSessionId, isPidAlive, claimHostWindow, publishWindowClaim } from "./session.js";
 import { EMPTY_SPAN, spansEqual, normalizeSelection, readBufferRow, readBuffer } from "./buffer.js";
 import { SESSION_MENU_INNER, formatStopwatch, computeMenuLayout, sessionRowAt } from "./menu.js";
 import { ContextMenuOverlay } from "./ContextMenuOverlay.js";
@@ -182,6 +182,11 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
     const syncClaudeTitle = () => {
       const info = detectClaudeSession(shell.pid);
       noteLiveSessionId(info?.sessionId);
+      // A tab's session id is not fixed: it appears a second after startup, and a
+      // /resume mints a new one. Re-file the window claim under whatever id the
+      // tab is showing now, so focus keeps working under the id every other
+      // surface has switched to. No-op unless the id actually changed.
+      publishWindowClaim();
       claudeTitle = info && info.sessionId !== 'unknown' ? `claude-${info.sessionId}`
                   : SESSION_ID ? `claude-${SESSION_ID}` : "";
       // Runs every 5s, so a topic set or cleared anywhere — this tab's menu, the
@@ -215,15 +220,18 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
     }, 10000);
 
     // Publish WHICH window hosts this session, so "focus this session's
-    // terminal" never has to guess between two windows showing the same
-    // `claude-<sessionId>` title (a killed session leaves its window open with
-    // the title frozen). Claimed once: a window id is unique among live windows,
-    // so it cannot go stale while we are alive, and the metadata file we wrote it
-    // to is liveness-filtered by our pid on the reading side.
-    if (SESSION_ID) {
-      claimHostWindow(setHostTitle, () => setHostTitle(claudeTitle || childTitle))
-        .then(id => { if (id) writeWindowId(id); });
-    }
+    // terminal" never has to guess between two windows wearing the same title (a
+    // killed session leaves its window open with the title frozen on it, and the
+    // daemon lists windows most-recently-used first). Worked out ONCE: a window id
+    // is unique among live windows, so it cannot go stale while we are alive, and
+    // readers drop the claim of a host whose pid is gone.
+    //
+    // NOT gated on SESSION_ID — that is empty for every ordinary tab, which left
+    // the sessions opened by hand resolving by title alone, i.e. exactly the guess
+    // this removes. publishWindowClaim files it under the session the tab is
+    // actually showing, and syncClaudeTitle re-files it when a resume changes that.
+    claimHostWindow(setHostTitle, () => setHostTitle(pinnedTitle() || childTitle))
+      .then(id => { if (id) publishWindowClaim(id); });
 
     shell.onData((data: string) => {
       if (scriptLogStream) scriptLogStream.write(data);
