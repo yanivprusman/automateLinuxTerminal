@@ -28,6 +28,8 @@ Type `exit` in the embedded shell to quit.
 Two right-click menus exist, rendered as absolutely-positioned Ink overlays with box-drawing borders (`ContextMenuOverlay` in `app.tsx`):
 
 1. **`automateLinuxTerminalMenu`** — triggered by right-clicking the clock/status area. Shows the active Claude session ID (first 8 chars) and Claude's working directory. Items are hover-highlighted.
+   - Each session block is *id → cwd → captions → bookmark*. `menu.ts` (`computeMenuLayout` / `sessionRowAt`) decides what a click at row N means and `ContextMenuOverlay` decides what row N looks like; nothing links them but arithmetic, so `tests/testMenuRows.ts` renders the real overlay and asserts they agree. A new row goes on the END of the block — any other placement shifts a row people already click by position.
+   - **Bookmark** toggles the dashboard's own `bookmarked` flag (`claude-session-meta.json`, keyed by claude session id), so a session ticked here is exactly what the dashboard's "Bookmarked" filter lists — there is no second, private bookmark store. Read and write take deliberately different routes: the state is read from the store's **file** (the checkbox must be right while the dashboard restarts, and the picker reads that file for topics already), while the write is a **POST to the dashboard**, which is the store's only writer and merges under a file lock. A refused or unreachable dashboard puts the tick back and says so on the row; a session whose id is still `unknown` (no hook fired yet) says that rather than silently declining. `tests/testBookmark.ts` pins both halves.
 2. **`clipboard`** — triggered by right-clicking the terminal area. Provides Copy (disabled if no selection) and Paste.
 
 ## Session picker (`sessionPicker.tsx`)

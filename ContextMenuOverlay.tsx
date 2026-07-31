@@ -65,6 +65,21 @@ export function ContextMenuOverlay({ menu }: { menu: ContextMenuState }) {
                     </Text>
                     <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
                   </Text>
+                  {/* Keep this session — the dashboard's own bookmark flag, so a session
+                      ticked here is the one its "Bookmarked" filter lists. Drawn with the
+                      same checkbox as "pin topic" below: both are state, not actions. */}
+                  <Text>
+                    <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
+                    <Text
+                      backgroundColor={menu.hoverItem === 300 + i ? "#3465a4" : "#2d2d2d"}
+                      color={menu.bookmarkIdx === i ? "#cc0000" : entry.bookmarked ? "#edd400" : "#888888"}
+                    >
+                      {sessionMenuPad(menu.bookmarkIdx === i
+                        ? `   ${menu.bookmarkMsg}`
+                        : entry.bookmarked ? "   ☑ bookmarked" : "   ☐ bookmark")}
+                    </Text>
+                    <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
+                  </Text>
                 </React.Fragment>
               );
             })}

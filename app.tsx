@@ -8,7 +8,7 @@ import xterm from "@xterm/headless";
 const { Terminal: XTerminal } = xterm;
 
 import type { Span, Line, Selection, ContextMenuState, SessionHistoryEntry } from "./types.js";
-import { SESSION_ID, LAUNCH_DIR, SCRIPT_LOG_FILE, writeMetadata, writeTopic, writePidTopic, propagateTopicToDashboard, fetchStoredTopic, readStoredTopic, cleanupMetadata, registerWithDashboard, notifySessionEnded, detectClaudeSession, noteLiveSessionId, isPidAlive, claimHostWindow, publishWindowClaim } from "./session.js";
+import { SESSION_ID, LAUNCH_DIR, SCRIPT_LOG_FILE, writeMetadata, writeTopic, writePidTopic, propagateTopicToDashboard, fetchStoredTopic, readStoredTopic, cleanupMetadata, registerWithDashboard, notifySessionEnded, detectClaudeSession, noteLiveSessionId, isPidAlive, claimHostWindow, publishWindowClaim, readBookmarkedIds, setBookmarked } from "./session.js";
 import { EMPTY_SPAN, spansEqual, normalizeSelection, readBufferRow, readBuffer } from "./buffer.js";
 import { SESSION_MENU_INNER, formatStopwatch, computeMenuLayout, sessionRowAt } from "./menu.js";
 import { ContextMenuOverlay } from "./ContextMenuOverlay.js";
@@ -340,12 +340,17 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
             existing.cwd = info.cwd;
             existing.alive = true;
           } else {
-            history.push({ sessionId: info.sessionId, cwd: info.cwd, pid: info.pid, startMs: Date.now(), alive: true });
+            history.push({ sessionId: info.sessionId, cwd: info.cwd, pid: info.pid, startMs: Date.now(), alive: true, bookmarked: false });
           }
         }
         for (const entry of history) {
           if (entry.alive && !isPidAlive(entry.pid)) entry.alive = false;
         }
+        // Re-read on every open rather than trusting what this tab last set: the
+        // same flag is toggled from the dashboard and the phone, and a checkbox
+        // showing this tab's last opinion of it would be wrong on sight.
+        const bookmarkedIds = readBookmarkedIds();
+        for (const entry of history) entry.bookmarked = bookmarkedIds.has(entry.sessionId);
         const sw = stopwatchRef.current;
         let swMs = sw.accumulatedMs;
         if (sw.running) swMs += Date.now() - sw.startMs;
@@ -353,7 +358,7 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
         const menuW = SESSION_MENU_INNER + 2;
         const r = Math.max(0, Math.min(row, d.rows - layout.height));
         const c = Math.max(0, Math.min(col, d.cols - menuW));
-        ctxMenuRef.current = { kind: 'automateLinuxTerminalMenu', row: r, col: c, hasSelection: false, hoverItem: -1, sessions: [...history], stopwatchDisplay: formatStopwatch(swMs), stopwatchAction: sw.running ? 'stop' : 'start', stopwatchRowOff: layout.stopwatchRow, topic: topicRef.current, editingTopic: false, editBuffer: '', topicRowOff: layout.topicRow, showTopicBar: showTopicBarRef.current, copiedSessionIdx: -1, captionsIdx: -1, captionsMsg: '' };
+        ctxMenuRef.current = { kind: 'automateLinuxTerminalMenu', row: r, col: c, hasSelection: false, hoverItem: -1, sessions: [...history], stopwatchDisplay: formatStopwatch(swMs), stopwatchAction: sw.running ? 'stop' : 'start', stopwatchRowOff: layout.stopwatchRow, topic: topicRef.current, editingTopic: false, editBuffer: '', topicRowOff: layout.topicRow, showTopicBar: showTopicBarRef.current, copiedSessionIdx: -1, captionsIdx: -1, captionsMsg: '', bookmarkIdx: -1, bookmarkMsg: '' };
         if (sw.running) {
           if (swTimerRef.current) clearInterval(swTimerRef.current);
           swTimerRef.current = setInterval(() => {
@@ -374,7 +379,7 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
           const s = normalizeSelection(selection.current!);
           return !(s.startRow === s.endRow && s.startCol === s.endCol);
         })();
-        ctxMenuRef.current = { kind: 'clipboard', row: r, col: c, hasSelection: hasSel, hoverItem: -1, sessions: [], stopwatchDisplay: null, stopwatchAction: null, stopwatchRowOff: 0, topic: '', editingTopic: false, editBuffer: '', topicRowOff: 0, showTopicBar: false, copiedSessionIdx: -1, captionsIdx: -1, captionsMsg: '' };
+        ctxMenuRef.current = { kind: 'clipboard', row: r, col: c, hasSelection: hasSel, hoverItem: -1, sessions: [], stopwatchDisplay: null, stopwatchAction: null, stopwatchRowOff: 0, topic: '', editingTopic: false, editBuffer: '', topicRowOff: 0, showTopicBar: false, copiedSessionIdx: -1, captionsIdx: -1, captionsMsg: '', bookmarkIdx: -1, bookmarkMsg: '' };
       }
       setCtxMenu({ ...ctxMenuRef.current });
       process.stdout.write('\x1b[?1003h');
@@ -412,9 +417,12 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
                 else if (rowOff === m.topicRowOff + 1) itemIdx = 21;
                 else if (rowOff === m.stopwatchRowOff) itemIdx = 10;
                 else {
-                  // 100 + i = the session itself (copy its id), 200 + i = its captions.
+                  // 100 + i = the session itself (copy its id), 200 + i = its captions,
+                  // 300 + i = its bookmark. Tested against what the overlay draws in
+                  // tests/testMenuRows.ts -- a drift here silently mis-routes clicks.
                   const hit = sessionRowAt(rowOff, m.sessions);
-                  itemIdx = hit ? (hit.action === 'captions' ? 200 : 100) + hit.idx : -1;
+                  const base = hit ? { copy: 100, captions: 200, bookmark: 300 }[hit.action] : 0;
+                  itemIdx = hit ? base + hit.idx : -1;
                 }
                 menuW = SESSION_MENU_INNER;
               } else {
@@ -430,6 +438,46 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
                   setCtxMenu(updated);
                 }
               } else if (button === 0 && isPress) {
+                // Ordered high band first: 300 is also >= 200, so a bookmark click would
+                // otherwise be served by the captions branch below.
+                if (m.kind === 'automateLinuxTerminalMenu' && onItem && itemIdx >= 300) {
+                  const si = itemIdx - 300;
+                  const sessEntry = m.sessions[si];
+                  const noteBookmark = (msg: string, clearAfter: number) => {
+                    if (!ctxMenuRef.current || ctxMenuRef.current.kind !== 'automateLinuxTerminalMenu') return;
+                    const u: ContextMenuState = { ...ctxMenuRef.current, bookmarkIdx: msg ? si : -1, bookmarkMsg: msg };
+                    ctxMenuRef.current = u;
+                    setCtxMenu(u);
+                    // Only wipe the message we put there: another row may have reported
+                    // something of its own while this one was counting down.
+                    if (clearAfter) setTimeout(() => {
+                      const cur = ctxMenuRef.current;
+                      if (cur?.kind === 'automateLinuxTerminalMenu' && cur.bookmarkIdx === si && cur.bookmarkMsg === msg) {
+                        noteBookmark('', 0);
+                      }
+                    }, clearAfter);
+                  };
+                  if (!sessEntry) {
+                    closeMenu();
+                  } else if (!sessEntry.sessionId || sessEntry.sessionId === 'unknown') {
+                    // No id to file the bookmark under -- the session has not fired a
+                    // hook yet (a second at startup, or hooks off). Say so on the row:
+                    // a checkbox that just refuses to tick reads as a broken menu.
+                    noteBookmark('▸ no session id yet', 3000);
+                  } else {
+                    // Tick it where the menu AND the history read it, so the row answers
+                    // the click at once and the state outlives closing the menu. The
+                    // dashboard owns the store, so a refusal from it puts the tick back.
+                    const next = !sessEntry.bookmarked;
+                    sessEntry.bookmarked = next;
+                    noteBookmark('', 0);
+                    setBookmarked(sessEntry.sessionId, next).catch((err: Error) => {
+                      sessEntry.bookmarked = !next;
+                      noteBookmark(`▸ ${err.message}`, 4000);
+                    });
+                  }
+                  pos += sgrMatch[0].length; continue;
+                }
                 if (m.kind === 'automateLinuxTerminalMenu' && onItem && itemIdx >= 200) {
                   const si = itemIdx - 200;
                   const sessEntry = m.sessions[si];

@@ -248,6 +248,59 @@ export async function fetchStoredTopic(): Promise<string> {
   return (await readStoredTopic()) ?? '';
 }
 
+// ── Bookmarks ────────────────────────────────────────────────────────────────
+// A bookmark is not a new idea here: the dashboard already keeps a durable
+// `bookmarked` flag per claude session id, and its "Bookmarked" filter lists
+// exactly those. So this menu toggles THAT flag rather than starting a second,
+// private store nothing else can see — bookmark a session from the terminal and
+// it is bookmarked on the dashboard and on the phone, and vice versa.
+//
+// Read and write deliberately take different routes, and neither is a fallback
+// for the other:
+//   - READ is the store's own file. The state has to be right on a menu that
+//     opens while the dashboard is restarting, and the picker already reads this
+//     same file for topics (sessionPickerData.ts names it too).
+//   - WRITE goes through the dashboard's API, because the dashboard is the
+//     store's only writer: it merges under a file lock, and a second writer
+//     racing it would drop whichever update landed first.
+const SESSION_META_FILE = "/opt/automateLinux/data/dashboard/claude-session-meta.json";
+
+/**
+ * Every session id currently flagged bookmarked.
+ *
+ * A missing file means "nothing has ever been bookmarked on this machine" (the
+ * dashboard writes it, and `data/**` is gitignored, so a fresh peer has none) —
+ * an empty answer, not an error. An unreadable or corrupt one is also answered
+ * empty here on purpose: this runs on the input path of a context menu, where
+ * the only sane behaviour is to draw the boxes unchecked.
+ */
+export function readBookmarkedIds(): Set<string> {
+  try {
+    const meta = JSON.parse(readFileSync(SESSION_META_FILE, 'utf-8')) as Record<string, { bookmarked?: unknown }>;
+    return new Set(Object.entries(meta).filter(([, m]) => m?.bookmarked === true).map(([id]) => id));
+  } catch {
+    return new Set();
+  }
+}
+
+/**
+ * Flag (or unflag) a session. Rejects with a short, sayable reason — the menu
+ * row shows it, so it has to fit and it has to be actionable.
+ */
+export async function setBookmarked(sessionId: string, bookmarked: boolean): Promise<void> {
+  let res: Response;
+  try {
+    res = await fetch(`http://localhost:${DASHBOARD_PORT}/api/claude-sessions/${sessionId}/bookmark`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ bookmarked }),
+    });
+  } catch {
+    throw new Error('dashboard unreachable');
+  }
+  if (!res.ok) throw new Error(`dashboard said ${res.status}`);
+}
+
 export function registerWithDashboard(shellPid: number): void {
   if (!SESSION_ID) return;
   const body = JSON.stringify({

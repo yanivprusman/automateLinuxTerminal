@@ -24,6 +24,9 @@ export interface SessionHistoryEntry {
   pid: number;
   startMs: number;
   alive: boolean;
+  /** Kept in the dashboard's durable store, so it is the same flag the dashboard's
+   *  "Bookmarked" filter reads. Re-read from disk every time the menu opens. */
+  bookmarked: boolean;
 }
 
 export interface ContextMenuState {
@@ -47,6 +50,11 @@ export interface ContextMenuState {
   // clicked -- a menu item that silently does nothing is indistinguishable from a misclick.
   captionsIdx: number;
   captionsMsg: string;
+  // Same contract for the bookmark line: the flag lives in the dashboard's store, so a
+  // click can fail (dashboard down, session with no id yet) and the row has to say why
+  // instead of quietly flipping back.
+  bookmarkIdx: number;
+  bookmarkMsg: string;
 }
 
 export interface ClaudeSessionInfo {

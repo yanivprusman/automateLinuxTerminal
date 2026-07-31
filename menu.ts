@@ -32,6 +32,7 @@ export function computeMenuLayout(sessions: SessionHistoryEntry[], hasStopwatch:
       row++;                     // session line
       if (e.cwd) row++;         // cwd line
       row++;                     // captions line
+      row++;                     // bookmark line
     }
   }
   row++;                         // topic separator
@@ -46,12 +47,15 @@ export function computeMenuLayout(sessions: SessionHistoryEntry[], hasStopwatch:
   return { titleRow, topicRow, stopwatchRow, height: row };
 }
 
-export type SessionRowAction = 'copy' | 'captions';
+export type SessionRowAction = 'copy' | 'captions' | 'bookmark';
 
 /** Which session a menu row belongs to, and what clicking it does. Every session occupies
- *  two or three consecutive rows -- the id line, an optional cwd line, and the captions
- *  line -- so the mapping is a walk, not arithmetic. Row 3 is the first session line:
- *  border, title, separator come first. */
+ *  three or four consecutive rows -- the id line, an optional cwd line, the captions line
+ *  and the bookmark line -- so the mapping is a walk, not arithmetic. Row 3 is the first
+ *  session line: border, title, separator come first.
+ *
+ *  The bookmark line is APPENDED rather than slotted in next to the id: every other
+ *  placement would shift the captions row that people already click by position. */
 export function sessionRowAt(
   rowOff: number,
   sessions: SessionHistoryEntry[],
@@ -66,6 +70,8 @@ export function sessionRowAt(
       row++;
     }
     if (rowOff === row) return { idx: i, action: 'captions' };
+    row++;
+    if (rowOff === row) return { idx: i, action: 'bookmark' };
     row++;
   }
   return null;

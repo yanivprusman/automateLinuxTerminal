@@ -1,6 +1,6 @@
 // The menu's hit-testing must agree with what the menu actually draws.
 //
-// Every session occupies two or three consecutive rows (id, optional cwd, captions), and
+// Every session occupies three or four consecutive rows (id, optional cwd, captions, bookmark), and
 // two separate pieces of code walk that shape: computeMenuLayout/sessionRowAt decide what a
 // click at row N means, while ContextMenuOverlay decides what row N looks like. Nothing
 // links them but arithmetic, and when they drift the failure is silent and awful -- a click
@@ -17,10 +17,12 @@ import { ContextMenuOverlay } from "../ContextMenuOverlay.js";
 import { computeMenuLayout, sessionRowAt } from "../menu.js";
 import type { ContextMenuState, SessionHistoryEntry } from "../types.js";
 
+// Mixed on purpose: a ticked and an unticked bookmark draw different text, and both have
+// to map back to the row that drew them.
 const sessions: SessionHistoryEntry[] = [
-  { sessionId: "aaaaaaaa-1111-2222-3333-444444444444", cwd: "/opt/dev/claude-voice", pid: 1, startMs: Date.now() - 60_000, alive: true },
-  { sessionId: "bbbbbbbb-5555-6666-7777-888888888888", cwd: null, pid: 2, startMs: Date.now() - 3_600_000, alive: false },
-  { sessionId: "cccccccc-9999-0000-1111-222222222222", cwd: "/opt/automateLinux", pid: 3, startMs: Date.now(), alive: true },
+  { sessionId: "aaaaaaaa-1111-2222-3333-444444444444", cwd: "/opt/dev/claude-voice", pid: 1, startMs: Date.now() - 60_000, alive: true, bookmarked: true },
+  { sessionId: "bbbbbbbb-5555-6666-7777-888888888888", cwd: null, pid: 2, startMs: Date.now() - 3_600_000, alive: false, bookmarked: false },
+  { sessionId: "cccccccc-9999-0000-1111-222222222222", cwd: "/opt/automateLinux", pid: 3, startMs: Date.now(), alive: true, bookmarked: false },
 ];
 
 const layout = computeMenuLayout(sessions, true);
@@ -29,7 +31,7 @@ const menu: ContextMenuState = {
   sessions, stopwatchDisplay: "00:00", stopwatchAction: "start",
   stopwatchRowOff: layout.stopwatchRow, topic: "voice", editingTopic: false, editBuffer: "",
   topicRowOff: layout.topicRow, showTopicBar: true, copiedSessionIdx: -1,
-  captionsIdx: -1, captionsMsg: "",
+  captionsIdx: -1, captionsMsg: "", bookmarkIdx: -1, bookmarkMsg: "",
 };
 
 const out = new PassThrough() as unknown as NodeJS.WriteStream;
@@ -61,11 +63,15 @@ if (lines.length !== layout.height) fail(`height mismatch — the menu draws ${l
 lines.forEach((line, rowOff) => {
   const hit = sessionRowAt(rowOff, sessions);
   const isCaptionsLine = line.includes("▸ captions");
+  // "pin topic" wears the same checkbox, so match the word, not the box.
+  const isBookmarkLine = /\bbookmark(ed)?\b/.test(line);
   const shortIdOn = sessions.findIndex(s => line.includes(s.sessionId.slice(0, 8)));
   const cwdOn = sessions.findIndex(s => s.cwd && line.includes(s.cwd));
 
   if (isCaptionsLine) {
     if (!hit || hit.action !== "captions") fail(`row ${rowOff} draws "captions" but maps to ${JSON.stringify(hit)}`);
+  } else if (isBookmarkLine) {
+    if (!hit || hit.action !== "bookmark") fail(`row ${rowOff} draws "bookmark" but maps to ${JSON.stringify(hit)}`);
   } else if (shortIdOn >= 0) {
     if (!hit || hit.action !== "copy" || hit.idx !== shortIdOn)
       fail(`row ${rowOff} draws session ${shortIdOn}'s id but maps to ${JSON.stringify(hit)}`);
@@ -85,6 +91,18 @@ if (captionsRows.length !== sessions.length) fail(`${sessions.length} sessions b
 captionsRows.forEach((rowOff, i) => {
   const hit = sessionRowAt(rowOff, sessions);
   if (!hit || hit.idx !== i) fail(`captions row ${rowOff} belongs to session ${hit?.idx}, expected ${i}`);
+});
+
+// Same for the bookmark row, and the tick has to be drawn on the session that carries it —
+// a checkbox that ticks the wrong row is worse than none.
+const bookmarkRows = lines.map((l, i) => [l, i] as const).filter(([l]) => /\bbookmark(ed)?\b/.test(l)).map(([, i]) => i);
+console.log(`bookmark rows: ${bookmarkRows.join(", ")}`);
+if (bookmarkRows.length !== sessions.length) fail(`${sessions.length} sessions but ${bookmarkRows.length} bookmark rows`);
+bookmarkRows.forEach((rowOff, i) => {
+  const hit = sessionRowAt(rowOff, sessions);
+  if (!hit || hit.idx !== i || hit.action !== "bookmark") fail(`bookmark row ${rowOff} maps to ${JSON.stringify(hit)}, expected session ${i}`);
+  const ticked = lines[rowOff].includes("☑");
+  if (ticked !== sessions[i].bookmarked) fail(`bookmark row ${rowOff} draws ${ticked ? "ticked" : "unticked"} for session ${i} (bookmarked: ${sessions[i].bookmarked})`);
 });
 
 // The rows the other items live on are computed the same way and are just as easy to slip.
