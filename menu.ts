@@ -4,6 +4,59 @@ export const SESSION_MENU_INNER = 28;
 export const sessionMenuPad = (s: string) => (s + " ".repeat(SESSION_MENU_INNER)).slice(0, SESSION_MENU_INNER);
 export const sessionMenuBorder = "─".repeat(SESSION_MENU_INNER);
 
+/** Cells the topic gets inside its menu row: the row's width less the space of padding
+ *  at each end. */
+export const TOPIC_VIEW_WIDTH = SESSION_MENU_INNER - 2;
+
+/** Longest topic the menu accepts. The row no longer has to HOLD the topic — one that
+ *  overflows scrolls — so this is only a sanity bound on a string that also becomes a
+ *  window title and a spoken label, not a layout constraint. */
+export const TOPIC_MAX_CHARS = 120;
+
+/** Widest the pinned topic bar may grow before it, too, becomes a scrolling sign. That
+ *  bar is drawn OVER the terminal's own output, so a long topic must not be allowed to
+ *  eat the line (or to push its left edge off the screen). */
+export const TOPIC_BAR_MAX_WIDTH = 40;
+
+export const topicBarWidth = (cols: number) => Math.max(8, Math.min(TOPIC_BAR_MAX_WIDTH, cols - 4));
+
+/** Milliseconds between single-cell steps of a scrolling sign. */
+export const MARQUEE_STEP_MS = 200;
+
+/** Steps the head of the text is held still at the start of every pass. A topic you
+ *  glance at should read from its beginning, not from wherever the loop happens to be. */
+export const MARQUEE_HOLD_STEPS = 6;
+
+/** Blank cells between the tail and the head coming round again, so the two ends of a
+ *  wrapped topic are never read as one phrase. */
+const MARQUEE_GAP = "   ";
+
+/** The `width` cells of `text` visible at step `tick` of a scrolling sign.
+ *
+ *  Pure on purpose: the clock that advances `tick` lives in the component (marquee.ts),
+ *  so what is drawn at a given step is testable without rendering or waiting. Text that
+ *  fits is returned untouched and never moves — only an overflowing topic scrolls. */
+export function marqueeWindow(text: string, width: number, tick: number): string {
+  if (width <= 0) return "";
+  if (text.length <= width) return text;
+  const cycle = text + MARQUEE_GAP;
+  const period = cycle.length + MARQUEE_HOLD_STEPS;
+  const phase = ((tick % period) + period) % period;
+  const start = Math.max(0, phase - MARQUEE_HOLD_STEPS);
+  return (cycle + cycle).slice(start, start + width);
+}
+
+/** What an over-long topic looks like while it is being TYPED: the tail, so the cursor
+ *  stays in view, with a leading ellipsis marking the part scrolled off.
+ *
+ *  Editing deliberately does NOT marquee — a field that slides out from under the cursor
+ *  cannot be typed into. */
+export function editWindow(text: string, width: number): string {
+  if (width <= 0) return "";
+  if (text.length <= width) return text;
+  return "…" + text.slice(-(width - 1));
+}
+
 export function formatElapsed(ms: number): string {
   const secs = Math.floor((Date.now() - ms) / 1000);
   if (secs < 60) return `${secs}s`;

@@ -32,6 +32,18 @@ Two right-click menus exist, rendered as absolutely-positioned Ink overlays with
    - **Bookmark** toggles the dashboard's own `bookmarked` flag (`claude-session-meta.json`, keyed by claude session id), so a session ticked here is exactly what the dashboard's "Bookmarked" filter lists — there is no second, private bookmark store. Read and write take deliberately different routes: the state is read from the store's **file** (the checkbox must be right while the dashboard restarts, and the picker reads that file for topics already), while the write is a **POST to the dashboard**, which is the store's only writer and merges under a file lock. A refused or unreachable dashboard puts the tick back and says so on the row; a session whose id is still `unknown` (no hook fired yet) says that rather than silently declining. `tests/testBookmark.ts` pins both halves.
 2. **`clipboard`** — triggered by right-clicking the terminal area. Provides Copy (disabled if no selection) and Paste.
 
+## The topic, and why it scrolls
+
+A topic longer than the row it is drawn in **scrolls like a sign** rather than being cut off with an ellipsis. The menu is a fixed 30 columns wide and the pinned bar hangs off the right edge of the terminal, so neither can grow with the text — but a topic worth setting ("rewriting the peer heartbeat so a worker survives a leader restart") is longer than 26 characters, and the old row showed its first 24 and nothing else.
+
+- **`marqueeWindow(text, width, tick)` in `menu.ts` is pure** — the visible cells at step N, with no clock in it. The clock is `useMarqueeTick` (`marquee.ts`), so what gets drawn is testable without rendering or waiting (`tests/testMarquee.ts` asserts, among other things, that the END of a long topic actually comes into view — the thing the ellipsis ate).
+- **A topic that fits never moves.** `useMarqueeTick(false)` runs no timer and changes no state, so the common case redraws exactly as rarely as it did before — this app paints over a live terminal, and every re-render is a frame written to it. For the same reason the topic row is its own component (`TopicRow`): only that row ticks at 5 Hz, not the whole menu.
+- **Each pass holds at the head** (`MARQUEE_HOLD_STEPS`) so a glance reads the topic from its beginning, and the ends are separated by a gap so `…restart` and `rewriting…` are never read as one phrase.
+- **Editing scrolls to the cursor, never marquees** (`editWindow`) — a field that slides out from under the cursor cannot be typed into. The clipped head is marked with a leading `…`.
+- **The typing cap is `TOPIC_MAX_CHARS` (120), not the row width.** It bounds what a topic sanely *is* — the string also becomes a window title and a spoken label — rather than what the row can hold.
+- **The pinned bar is capped at `TOPIC_BAR_MAX_WIDTH` and scrolls inside that cap.** It is drawn over real terminal output, so it may borrow a corner of a line, never the line; before the cap, a long topic pushed its own left edge across the screen and eventually off it. `☐ pin topic` hides the bar altogether if a moving sign on the terminal is unwanted.
+- The session picker clips topics instead (`pad`) — it draws one per row, and a screenful of things sliding at once is noise, not information.
+
 ## Session picker (`sessionPicker.tsx`)
 
 A standalone Ink app that lists Claude sessions by the **topic** set in the session menu, so a session can be resumed by what it was about instead of by UUID. The `claudeResume` shell function (automateLinux `terminal/functions/claude.sh`) runs it and resumes whatever it returns; `claudeResumeById <uuid>` is the direct-by-id path.

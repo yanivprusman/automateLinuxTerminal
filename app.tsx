@@ -10,7 +10,8 @@ const { Terminal: XTerminal } = xterm;
 import type { Span, Line, Selection, ContextMenuState, SessionHistoryEntry } from "./types.js";
 import { SESSION_ID, LAUNCH_DIR, SCRIPT_LOG_FILE, writeMetadata, writeTopic, writePidTopic, propagateTopicToDashboard, fetchStoredTopic, readStoredTopic, cleanupMetadata, registerWithDashboard, notifySessionEnded, detectClaudeSession, noteLiveSessionId, isPidAlive, claimHostWindow, publishWindowClaim, readBookmarkedIds, setBookmarked } from "./session.js";
 import { EMPTY_SPAN, spansEqual, normalizeSelection, readBufferRow, readBuffer } from "./buffer.js";
-import { SESSION_MENU_INNER, formatStopwatch, computeMenuLayout, sessionRowAt } from "./menu.js";
+import { SESSION_MENU_INNER, formatStopwatch, computeMenuLayout, sessionRowAt, TOPIC_MAX_CHARS, topicBarWidth, marqueeWindow } from "./menu.js";
+import { useMarqueeTick } from "./marquee.js";
 import { ContextMenuOverlay } from "./ContextMenuOverlay.js";
 import { clipboardWrite, clipboardRead } from "./clipboard.js";
 
@@ -63,6 +64,22 @@ const TerminalLine = React.memo(function TerminalLine({ spans }: { spans: Span[]
     </Text>
   );
 });
+
+/** The pinned topic bar — the same sign as the menu row, drawn on the terminal itself.
+ *
+ *  It hangs off the RIGHT edge, so before this a long topic pushed its own left edge across
+ *  the screen and eventually off it; now the bar is capped and the text scrolls inside it
+ *  instead. Capped rather than full-width because this box is drawn over live terminal
+ *  output — it may borrow a corner of a line, never the line. */
+function TopicSign({ text, cols }: { text: string; cols: number }) {
+  const width = Math.min(text.length, topicBarWidth(cols));
+  const tick = useMarqueeTick(text.length > width, text);
+  return (
+    <Box position="absolute" marginTop={1} marginLeft={Math.max(0, cols - width - 2)}>
+      <Text backgroundColor="#1c1c1c" color="#ad7fa8">{` ${marqueeWindow(text, width, tick)} `}</Text>
+    </Box>
+  );
+}
 
 function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
   const { stdin, setRawMode } = useStdin();
@@ -628,7 +645,10 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
               ctxMenuRef.current = upd;
               setCtxMenu(upd);
             } else if (ch.charCodeAt(0) >= 32) {
-              if (m.editBuffer.length < SESSION_MENU_INNER - 3) {
+              // Bounded by what a topic sanely IS, not by what the menu row can hold:
+              // an over-long topic scrolls in the row and in the bar, and the field
+              // itself scrolls to the cursor while it is typed.
+              if (m.editBuffer.length < TOPIC_MAX_CHARS) {
                 const upd: ContextMenuState = { ...m, editBuffer: m.editBuffer + ch };
                 ctxMenuRef.current = upd;
                 setCtxMenu(upd);
@@ -791,11 +811,7 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
         <TerminalLine key={i} spans={spans} />
       ))}
       {ctxMenu && <ContextMenuOverlay menu={ctxMenu} />}
-      {showTopicBar && topicRef.current && (
-        <Box position="absolute" marginTop={1} marginLeft={Math.max(0, cols - topicRef.current.length - 2)}>
-          <Text backgroundColor="#1c1c1c" color="#ad7fa8">{` ${topicRef.current} `}</Text>
-        </Box>
-      )}
+      {showTopicBar && topicRef.current && <TopicSign text={topicRef.current} cols={cols} />}
     </Box>
   );
 }

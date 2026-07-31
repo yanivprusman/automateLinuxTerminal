@@ -2,7 +2,38 @@ import React from "react";
 import { Box, Text } from "ink";
 import type { ContextMenuState } from "./types.js";
 import { APP_VERSION } from "./session.js";
-import { SESSION_MENU_INNER, sessionMenuPad, sessionMenuBorder, formatElapsed } from "./menu.js";
+import { SESSION_MENU_INNER, sessionMenuPad, sessionMenuBorder, formatElapsed, TOPIC_VIEW_WIDTH, marqueeWindow, editWindow } from "./menu.js";
+import { useMarqueeTick } from "./marquee.js";
+
+/** The topic row. A topic wider than the row is not cut off with an ellipsis — it scrolls,
+ *  like a sign, so the whole of it can be read from a menu that stays 30 columns wide.
+ *
+ *  It is its own component because it owns the scroll clock: only this row re-renders at
+ *  5 Hz, and only while there is something out of view. The rest of the menu stays a still
+ *  frame, and a topic that fits redraws exactly as rarely as it did before. */
+function TopicRow({ menu }: { menu: ContextMenuState }) {
+  const scrolls = !menu.editingTopic && menu.topic.length > TOPIC_VIEW_WIDTH;
+  const tick = useMarqueeTick(scrolls, menu.topic);
+  // While typing, the tail is what matters (the cursor is there), so the field scrolls to
+  // the cursor instead of marqueeing; the block cursor takes the last cell.
+  const body = menu.editingTopic
+    ? ` ${editWindow(menu.editBuffer, TOPIC_VIEW_WIDTH - 1)}█`
+    : menu.topic
+      ? ` ${marqueeWindow(menu.topic, TOPIC_VIEW_WIDTH, tick)}`
+      : " set topic…";
+  return (
+    <Text>
+      <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
+      <Text
+        backgroundColor={menu.hoverItem === 20 ? "#3465a4" : "#2d2d2d"}
+        color={menu.editingTopic ? "#ffffff" : (menu.topic ? "#ad7fa8" : "#666666")}
+      >
+        {sessionMenuPad(body)}
+      </Text>
+      <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
+    </Text>
+  );
+}
 
 export function ContextMenuOverlay({ menu }: { menu: ContextMenuState }) {
   if (menu.kind === 'automateLinuxTerminalMenu') {
@@ -86,19 +117,7 @@ export function ContextMenuOverlay({ menu }: { menu: ContextMenuState }) {
           </>
         )}
         <Text backgroundColor="#2d2d2d" color="#888888">{`├${sessionMenuBorder}┤`}</Text>
-        <Text>
-          <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
-          <Text backgroundColor={menu.hoverItem === 20 ? "#3465a4" : "#2d2d2d"} color={menu.editingTopic ? "#ffffff" : (menu.topic ? "#ad7fa8" : "#666666")}>
-            {menu.editingTopic
-              ? sessionMenuPad(` ${menu.editBuffer}█`)
-              : sessionMenuPad(menu.topic
-                  ? (menu.topic.length > SESSION_MENU_INNER - 2
-                      ? ` ${menu.topic.slice(0, SESSION_MENU_INNER - 4)}…`
-                      : ` ${menu.topic}`)
-                  : " set topic…")}
-          </Text>
-          <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
-        </Text>
+        <TopicRow menu={menu} />
         <Text>
           <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
           <Text backgroundColor={menu.hoverItem === 21 ? "#3465a4" : "#2d2d2d"} color="#888888">
