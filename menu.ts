@@ -75,12 +75,27 @@ export function formatStopwatch(ms: number): string {
   return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
 }
 
-export function computeMenuLayout(sessions: SessionHistoryEntry[], hasStopwatch: boolean) {
+/** Where every row of the session menu lands, as offsets from its top border.
+ *
+ *  The topic comes FIRST, above the session list: it is the one row people open this menu
+ *  to reach, and a menu that grows a row per running session kept pushing it further down
+ *  the screen. Everything below it is reference (which sessions exist) or occasional (the
+ *  timer), so it can move.
+ *
+ *  The name and version are not a row -- they are behind the "?" at the top, which opens
+ *  one info line in place. */
+export function computeMenuLayout(sessions: SessionHistoryEntry[], hasStopwatch: boolean, infoOpen: boolean) {
   let row = 0;
   row++;                         // top border
-  const titleRow = row; row++;   // title
+  const helpRow = row; row++;    // the "?"
+  if (infoOpen) row++;           // the info line it opens
+  row++;                         // topic separator
+  const topicRow = row; row++;   // topic
+  row++;                         // pin topic
+  let sessionsRow = -1;
   if (sessions.length > 0) {
     row++;                       // session separator
+    sessionsRow = row;
     for (const e of sessions) {
       row++;                     // session line
       if (e.cwd) row++;         // cwd line
@@ -88,33 +103,34 @@ export function computeMenuLayout(sessions: SessionHistoryEntry[], hasStopwatch:
       row++;                     // bookmark line
     }
   }
-  row++;                         // topic separator
-  const topicRow = row; row++;   // topic
-  row++;                         // pin topic
   let stopwatchRow = -1;
   if (hasStopwatch) {
     row++;                       // stopwatch separator
     stopwatchRow = row; row++;   // stopwatch
   }
   row++;                         // bottom border
-  return { titleRow, topicRow, stopwatchRow, height: row };
+  return { helpRow, topicRow, sessionsRow, stopwatchRow, height: row };
 }
 
 export type SessionRowAction = 'copy' | 'captions' | 'bookmark';
 
 /** Which session a menu row belongs to, and what clicking it does. Every session occupies
  *  three or four consecutive rows -- the id line, an optional cwd line, the captions line
- *  and the bookmark line -- so the mapping is a walk, not arithmetic. Row 3 is the first
- *  session line: border, title, separator come first.
+ *  and the bookmark line -- so the mapping is a walk, not arithmetic.
+ *
+ *  `startRow` is where the first session line is drawn, from computeMenuLayout. It is
+ *  passed in rather than counted from the top because what sits above the list now varies:
+ *  the "?" opens an info line, and the topic section above shifts everything with it.
  *
  *  The bookmark line is APPENDED rather than slotted in next to the id: every other
  *  placement would shift the captions row that people already click by position. */
 export function sessionRowAt(
   rowOff: number,
   sessions: SessionHistoryEntry[],
+  startRow: number,
 ): { idx: number; action: SessionRowAction } | null {
-  if (sessions.length === 0) return null;
-  let row = 3;
+  if (sessions.length === 0 || startRow < 0) return null;
+  let row = startRow;
   for (let i = 0; i < sessions.length; i++) {
     if (rowOff === row) return { idx: i, action: 'copy' };
     row++;

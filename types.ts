@@ -43,6 +43,13 @@ export interface ContextMenuState {
   editingTopic: boolean;
   editBuffer: string;
   topicRowOff: number;
+  // Where the first session line is drawn, -1 when there are none. The list no longer
+  // starts at a fixed offset -- the topic section above it, and the info line the "?"
+  // opens, both move it -- so the row-mapper is told rather than left to count.
+  sessionsRowOff: number;
+  // Whether the "?" at the top has its info line open. What the menu is and which version
+  // of it you are looking at is worth one keystroke to see, not a permanent row.
+  infoOpen: boolean;
   showTopicBar: boolean;
   copiedSessionIdx: number;
   // Which session's captions line is reporting something, and what it says ("opening…",

@@ -44,9 +44,33 @@ export function ContextMenuOverlay({ menu }: { menu: ContextMenuState }) {
     return (
       <Box position="absolute" marginTop={menu.row} marginLeft={menu.col} flexDirection="column">
         <Text backgroundColor="#2d2d2d" color="#888888">{`╭${sessionMenuBorder}╮`}</Text>
+        {/* What this menu is, and which version of it, used to hold the top row of every
+            open. It is reference, not something anyone came here to click, so it now sits
+            behind this "?" and unfolds in place. */}
         <Text>
           <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
-          <Text backgroundColor={menu.hoverItem === 0 ? "#3465a4" : "#2d2d2d"} color="#8ae234">{titleStr}</Text>
+          <Text
+            backgroundColor={menu.hoverItem === 30 ? "#3465a4" : "#2d2d2d"}
+            color={menu.infoOpen ? "#8ae234" : "#888888"}
+          >
+            {sessionMenuPad(" ?")}
+          </Text>
+          <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
+        </Text>
+        {menu.infoOpen && (
+          <Text>
+            <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
+            <Text backgroundColor={menu.hoverItem === 31 ? "#3465a4" : "#2d2d2d"} color="#8ae234">{titleStr}</Text>
+            <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
+          </Text>
+        )}
+        <Text backgroundColor="#2d2d2d" color="#888888">{`├${sessionMenuBorder}┤`}</Text>
+        <TopicRow menu={menu} />
+        <Text>
+          <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
+          <Text backgroundColor={menu.hoverItem === 21 ? "#3465a4" : "#2d2d2d"} color="#888888">
+            {sessionMenuPad(menu.showTopicBar ? " ☑ pin topic" : " ☐ pin topic")}
+          </Text>
           <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
         </Text>
         {menu.sessions.length > 0 && (
@@ -119,15 +143,6 @@ export function ContextMenuOverlay({ menu }: { menu: ContextMenuState }) {
             })}
           </>
         )}
-        <Text backgroundColor="#2d2d2d" color="#888888">{`├${sessionMenuBorder}┤`}</Text>
-        <TopicRow menu={menu} />
-        <Text>
-          <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
-          <Text backgroundColor={menu.hoverItem === 21 ? "#3465a4" : "#2d2d2d"} color="#888888">
-            {sessionMenuPad(menu.showTopicBar ? " ☑ pin topic" : " ☐ pin topic")}
-          </Text>
-          <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
-        </Text>
         {menu.stopwatchDisplay != null && (
           <>
             <Text backgroundColor="#2d2d2d" color="#888888">{`├${sessionMenuBorder}┤`}</Text>
