@@ -375,7 +375,7 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
         const menuW = SESSION_MENU_INNER + 2;
         const r = Math.max(0, Math.min(row, d.rows - layout.height));
         const c = Math.max(0, Math.min(col, d.cols - menuW));
-        ctxMenuRef.current = { kind: 'automateLinuxTerminalMenu', row: r, col: c, hasSelection: false, hoverItem: -1, sessions: [...history], stopwatchDisplay: formatStopwatch(swMs), stopwatchAction: sw.running ? 'stop' : 'start', stopwatchRowOff: layout.stopwatchRow, topic: topicRef.current, editingTopic: false, editBuffer: '', topicRowOff: layout.topicRow, sessionsRowOff: layout.sessionsRow, infoOpen: false, showTopicBar: showTopicBarRef.current, copiedSessionIdx: -1, captionsIdx: -1, captionsMsg: '', bookmarkIdx: -1, bookmarkMsg: '' };
+        ctxMenuRef.current = { kind: 'automateLinuxTerminalMenu', row: r, col: c, hasSelection: false, hoverItem: -1, sessions: [...history], stopwatchDisplay: formatStopwatch(swMs), stopwatchAction: sw.running ? 'stop' : 'start', stopwatchRowOff: layout.stopwatchRow, topic: topicRef.current, editingTopic: false, editBuffer: '', topicRowOff: layout.topicRow, sessionsRowOff: layout.sessionsRow, helpRowOff: layout.helpRow, infoOpen: false, showTopicBar: showTopicBarRef.current, copiedSessionIdx: -1, captionsIdx: -1, captionsMsg: '', bookmarkIdx: -1, bookmarkMsg: '' };
         if (sw.running) {
           if (swTimerRef.current) clearInterval(swTimerRef.current);
           swTimerRef.current = setInterval(() => {
@@ -396,7 +396,7 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
           const s = normalizeSelection(selection.current!);
           return !(s.startRow === s.endRow && s.startCol === s.endCol);
         })();
-        ctxMenuRef.current = { kind: 'clipboard', row: r, col: c, hasSelection: hasSel, hoverItem: -1, sessions: [], stopwatchDisplay: null, stopwatchAction: null, stopwatchRowOff: 0, topic: '', editingTopic: false, editBuffer: '', topicRowOff: 0, sessionsRowOff: -1, infoOpen: false, showTopicBar: false, copiedSessionIdx: -1, captionsIdx: -1, captionsMsg: '', bookmarkIdx: -1, bookmarkMsg: '' };
+        ctxMenuRef.current = { kind: 'clipboard', row: r, col: c, hasSelection: hasSel, hoverItem: -1, sessions: [], stopwatchDisplay: null, stopwatchAction: null, stopwatchRowOff: 0, topic: '', editingTopic: false, editBuffer: '', topicRowOff: 0, sessionsRowOff: -1, helpRowOff: -1, infoOpen: false, showTopicBar: false, copiedSessionIdx: -1, captionsIdx: -1, captionsMsg: '', bookmarkIdx: -1, bookmarkMsg: '' };
       }
       setCtxMenu({ ...ctxMenuRef.current });
       process.stdout.write('\x1b[?1003h');
@@ -429,9 +429,11 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
               let itemIdx: number;
               let menuW: number;
               if (m.kind === 'automateLinuxTerminalMenu') {
-                // 30 = the "?", 31 = the info line it opens; either one toggles it.
-                if (rowOff === 1) itemIdx = 30;
-                else if (m.infoOpen && rowOff === 2) itemIdx = 31;
+                // 30 = the "?", 31 = the info line it opens; either one toggles it. Both
+                // are read off the layout: the "?" is the last row of the menu, so where
+                // it lands moves with every session that appears above it.
+                if (rowOff === m.helpRowOff) itemIdx = 30;
+                else if (m.infoOpen && rowOff === m.helpRowOff + 1) itemIdx = 31;
                 else if (rowOff === m.topicRowOff) itemIdx = 20;
                 else if (rowOff === m.topicRowOff + 1) itemIdx = 21;
                 else if (rowOff === m.stopwatchRowOff) itemIdx = 10;
@@ -591,11 +593,12 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
                   pos += sgrMatch[0].length; continue;
                 }
                 if (m.kind === 'automateLinuxTerminalMenu' && onItem && (itemIdx === 30 || itemIdx === 31)) {
-                  // The info line opens in place, so the menu gets a row taller and every
-                  // offset below the "?" moves. Re-layout rather than nudging the stored
-                  // offsets by one: two places would then have to agree on the height of
-                  // something only computeMenuLayout knows. Re-clamp too -- a menu opened
-                  // against the bottom of the screen has no room to grow downwards.
+                  // The info line opens in place and the menu gets a row taller. Below the
+                  // "?" there is nothing left to move now that it sits last, but re-layout
+                  // anyway rather than assuming that: two places would otherwise have to
+                  // agree on a shape only computeMenuLayout knows. Re-clamp too -- a menu
+                  // opened against the bottom of the screen has no room to grow downwards,
+                  // and it is the row the "?" is ON that the re-clamp shifts.
                   const infoOpen = !m.infoOpen;
                   const layout = computeMenuLayout(m.sessions, m.stopwatchDisplay != null, infoOpen);
                   const d = dimsRef.current;
@@ -605,6 +608,7 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
                     topicRowOff: layout.topicRow,
                     sessionsRowOff: layout.sessionsRow,
                     stopwatchRowOff: layout.stopwatchRow,
+                    helpRowOff: layout.helpRow,
                   };
                   ctxMenuRef.current = upd;
                   setCtxMenu(upd);

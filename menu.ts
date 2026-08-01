@@ -15,8 +15,13 @@ export const TOPIC_MAX_CHARS = 120;
 
 /** Widest the pinned topic bar may grow before it, too, becomes a scrolling sign. That
  *  bar is drawn OVER the terminal's own output, so a long topic must not be allowed to
- *  eat the line (or to push its left edge off the screen). */
-export const TOPIC_BAR_MAX_WIDTH = 40;
+ *  eat the line (or to push its left edge off the screen).
+ *
+ *  Deliberately the SAME width as the menu row: one topic must be a sign in both places
+ *  or in neither. At 40 the two disagreed for every topic between 27 and 40 characters —
+ *  the menu row slid while the bar an inch away sat still, which reads as the bar being
+ *  broken rather than as it having nothing to hide. */
+export const TOPIC_BAR_MAX_WIDTH = TOPIC_VIEW_WIDTH;
 
 export const topicBarWidth = (cols: number) => Math.max(8, Math.min(TOPIC_BAR_MAX_WIDTH, cols - 4));
 
@@ -77,19 +82,19 @@ export function formatStopwatch(ms: number): string {
 
 /** Where every row of the session menu lands, as offsets from its top border.
  *
- *  The topic comes FIRST, above the session list: it is the one row people open this menu
- *  to reach, and a menu that grows a row per running session kept pushing it further down
- *  the screen. Everything below it is reference (which sessions exist) or occasional (the
- *  timer), so it can move.
+ *  The topic comes FIRST, on the row directly under the top border: it is the one row
+ *  people open this menu to reach, and a menu that grows a row per running session kept
+ *  pushing it further down the screen. Everything below it is reference (which sessions
+ *  exist) or occasional (the timer), so it can move.
  *
- *  The name and version are not a row -- they are behind the "?" at the top, which opens
- *  one info line in place. */
+ *  The name and version are not a row -- they are behind the "?", which opens one info
+ *  line in place. That "?" now sits LAST, under everything: it is the least-wanted thing
+ *  in the menu, and holding the first row it pushed the topic — the most-wanted — one row
+ *  further from the pointer on every single open. At the bottom it also costs nothing to
+ *  unfold: the info line it opens grows the menu downwards, moving no row above it. */
 export function computeMenuLayout(sessions: SessionHistoryEntry[], hasStopwatch: boolean, infoOpen: boolean) {
   let row = 0;
   row++;                         // top border
-  const helpRow = row; row++;    // the "?"
-  if (infoOpen) row++;           // the info line it opens
-  row++;                         // topic separator
   const topicRow = row; row++;   // topic
   row++;                         // pin topic
   let sessionsRow = -1;
@@ -108,6 +113,9 @@ export function computeMenuLayout(sessions: SessionHistoryEntry[], hasStopwatch:
     row++;                       // stopwatch separator
     stopwatchRow = row; row++;   // stopwatch
   }
+  row++;                         // help separator
+  const helpRow = row; row++;    // the "?"
+  if (infoOpen) row++;           // the info line it opens
   row++;                         // bottom border
   return { helpRow, topicRow, sessionsRow, stopwatchRow, height: row };
 }

@@ -35,7 +35,7 @@ async function drawMenu(infoOpen: boolean) {
     kind: "automateLinuxTerminalMenu", row: 0, col: 0, hasSelection: false, hoverItem: -1,
     sessions, stopwatchDisplay: "00:00", stopwatchAction: "start",
     stopwatchRowOff: layout.stopwatchRow, topic: "voice", editingTopic: false, editBuffer: "",
-    topicRowOff: layout.topicRow, sessionsRowOff: layout.sessionsRow, infoOpen,
+    topicRowOff: layout.topicRow, sessionsRowOff: layout.sessionsRow, helpRowOff: layout.helpRow, infoOpen,
     showTopicBar: true, copiedSessionIdx: -1,
     captionsIdx: -1, captionsMsg: "", bookmarkIdx: -1, bookmarkMsg: "",
   };
@@ -132,6 +132,12 @@ async function check(infoOpen: boolean) {
   // old title row was (a permanent row is the thing this replaced).
   const helpLine = lines[layout.helpRow] ?? "";
   if (!helpLine.includes("?")) fail(`helpRow ${layout.helpRow} does not draw the "?": "${helpLine.trim()}"`);
+  // And it is LAST: the topic is what the menu is opened for, so it owns the first row and
+  // the "?" owns the bottom. Off by one here and clicking the "?" hits the timer.
+  if (layout.topicRow !== 1) fail(`topic row is ${layout.topicRow}, expected 1 (directly under the top border)`);
+  const lastItemRow = layout.height - 2 - (infoOpen ? 1 : 0);
+  if (layout.helpRow !== lastItemRow) fail(`helpRow ${layout.helpRow} is not the menu's last item row (${lastItemRow})`);
+  if (layout.helpRow < layout.stopwatchRow) fail(`the "?" at ${layout.helpRow} is above the timer at ${layout.stopwatchRow}`);
   const infoRows = lines.map((l, i) => [l, i] as const).filter(([l]) => l.includes("automateLinuxTerminal")).map(([, i]) => i);
   if (infoOpen) {
     if (infoRows.length !== 1) fail(`info open: expected one name/version line, drew ${infoRows.length}`);
@@ -145,12 +151,14 @@ await check(false);
 await check(true);
 
 // Opening the info must cost exactly the one row it draws — anything else means the layout
-// and the overlay disagree about what unfolding the "?" does.
+// and the overlay disagree about what unfolding the "?" does. Now that the "?" is last it
+// unfolds DOWNWARDS into the border, so nothing above it may shift: that is the point of
+// having moved it, and a row that moves under the pointer is what this pins.
 const shut = computeMenuLayout(sessions, true, false);
 const open = computeMenuLayout(sessions, true, true);
 if (open.height !== shut.height + 1) fail(`opening the info changed the height by ${open.height - shut.height}, expected 1`);
-for (const k of ["topicRow", "sessionsRow", "stopwatchRow"] as const) {
-  if (open[k] !== shut[k] + 1) fail(`opening the info moved ${k} by ${open[k] - shut[k]}, expected 1`);
+for (const k of ["topicRow", "sessionsRow", "stopwatchRow", "helpRow"] as const) {
+  if (open[k] !== shut[k]) fail(`opening the info moved ${k} by ${open[k] - shut[k]}, expected 0`);
 }
 
 console.log(failures ? `\nFAILED (${failures})` : "\nPASS");

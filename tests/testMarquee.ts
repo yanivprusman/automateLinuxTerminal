@@ -77,5 +77,15 @@ if (topicBarWidth(200) !== TOPIC_BAR_MAX_WIDTH) fail("wide terminal should cap t
 if (topicBarWidth(20) !== 16) fail(`narrow terminal bar width: got ${topicBarWidth(20)}, want 16`);
 if (topicBarWidth(1) < 1) fail("1-column terminal produced a non-positive bar width");
 
+// The two places a topic is drawn must START SCROLLING TOGETHER. When the bar was wider
+// than the menu row, every topic between the two widths slid in the menu and sat still in
+// the bar — one topic behaving two ways, which reads as the bar being broken.
+if (TOPIC_BAR_MAX_WIDTH !== TOPIC_VIEW_WIDTH) {
+  fail(`the bar caps at ${TOPIC_BAR_MAX_WIDTH} but the menu row is ${TOPIC_VIEW_WIDTH}: topics between them scroll in one place only`);
+}
+const borderline = "x".repeat(TOPIC_VIEW_WIDTH + 1);
+const barW = Math.min(borderline.length, topicBarWidth(200));
+if (!(borderline.length > barW)) fail("a topic one cell too wide for the menu row does not overflow the bar");
+
 console.log(failures === 0 ? "PASS" : `${failures} failure(s)`);
 process.exit(failures === 0 ? 0 : 1);

@@ -44,27 +44,6 @@ export function ContextMenuOverlay({ menu }: { menu: ContextMenuState }) {
     return (
       <Box position="absolute" marginTop={menu.row} marginLeft={menu.col} flexDirection="column">
         <Text backgroundColor="#2d2d2d" color="#888888">{`╭${sessionMenuBorder}╮`}</Text>
-        {/* What this menu is, and which version of it, used to hold the top row of every
-            open. It is reference, not something anyone came here to click, so it now sits
-            behind this "?" and unfolds in place. */}
-        <Text>
-          <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
-          <Text
-            backgroundColor={menu.hoverItem === 30 ? "#3465a4" : "#2d2d2d"}
-            color={menu.infoOpen ? "#8ae234" : "#888888"}
-          >
-            {sessionMenuPad(" ?")}
-          </Text>
-          <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
-        </Text>
-        {menu.infoOpen && (
-          <Text>
-            <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
-            <Text backgroundColor={menu.hoverItem === 31 ? "#3465a4" : "#2d2d2d"} color="#8ae234">{titleStr}</Text>
-            <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
-          </Text>
-        )}
-        <Text backgroundColor="#2d2d2d" color="#888888">{`├${sessionMenuBorder}┤`}</Text>
         <TopicRow menu={menu} />
         <Text>
           <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
@@ -157,6 +136,28 @@ export function ContextMenuOverlay({ menu }: { menu: ContextMenuState }) {
               <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
             </Text>
           </>
+        )}
+        {/* What this menu is, and which version of it, used to hold the top row of every
+            open. It is reference, not something anyone came here to click, so it sits
+            behind this "?" and unfolds in place — and it sits LAST, so the row people do
+            come here for is the one under the pointer, not one pushed down by this. */}
+        <Text backgroundColor="#2d2d2d" color="#888888">{`├${sessionMenuBorder}┤`}</Text>
+        <Text>
+          <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
+          <Text
+            backgroundColor={menu.hoverItem === 30 ? "#3465a4" : "#2d2d2d"}
+            color={menu.infoOpen ? "#8ae234" : "#888888"}
+          >
+            {sessionMenuPad(" ?")}
+          </Text>
+          <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
+        </Text>
+        {menu.infoOpen && (
+          <Text>
+            <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
+            <Text backgroundColor={menu.hoverItem === 31 ? "#3465a4" : "#2d2d2d"} color="#8ae234">{titleStr}</Text>
+            <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
+          </Text>
         )}
         <Text backgroundColor="#2d2d2d" color="#888888">{`╰${sessionMenuBorder}╯`}</Text>
       </Box>

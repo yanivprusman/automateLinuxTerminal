@@ -47,8 +47,12 @@ export interface ContextMenuState {
   // starts at a fixed offset -- the topic section above it, and the info line the "?"
   // opens, both move it -- so the row-mapper is told rather than left to count.
   sessionsRowOff: number;
-  // Whether the "?" at the top has its info line open. What the menu is and which version
-  // of it you are looking at is worth one keystroke to see, not a permanent row.
+  // Where the "?" is drawn. It sits on the LAST row of the menu, so its offset depends on
+  // everything above it (the session list, the timer) -- it is no longer the constant row
+  // 1 the click-mapper used to assume.
+  helpRowOff: number;
+  // Whether the "?" has its info line open. What the menu is and which version of it you
+  // are looking at is worth one keystroke to see, not a permanent row.
   infoOpen: boolean;
   showTopicBar: boolean;
   copiedSessionIdx: number;
