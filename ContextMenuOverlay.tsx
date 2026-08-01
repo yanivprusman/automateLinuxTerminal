@@ -92,13 +92,16 @@ export function ContextMenuOverlay({ menu }: { menu: ContextMenuState }) {
                       backgroundColor={menu.hoverItem === 200 + i ? "#3465a4" : "#2d2d2d"}
                       color={menu.captionsIdx === i ? "#34e2e2" : "#729fcf"}
                     >
-                      {sessionMenuPad(menu.captionsIdx === i ? `   ${menu.captionsMsg}` : "   ▸ captions")}
+                      {sessionMenuPad(menu.captionsIdx === i ? ` ${menu.captionsMsg}` : " ▸ captions")}
                     </Text>
                     <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
                   </Text>
                   {/* Keep this session — the dashboard's own bookmark flag, so a session
                       ticked here is the one its "Bookmarked" filter lists. Drawn with the
-                      same checkbox as "pin topic" below: both are state, not actions. */}
+                      same checkbox as "pin topic" below: both are state, not actions —
+                      and in the same column as it, so the two boxes line up. Every row in
+                      this menu starts one space in; the session's ●/○ head, not an indent,
+                      is what marks where one session's block begins. */}
                   <Text>
                     <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
                     <Text
@@ -106,8 +109,8 @@ export function ContextMenuOverlay({ menu }: { menu: ContextMenuState }) {
                       color={menu.bookmarkIdx === i ? "#cc0000" : entry.bookmarked ? "#edd400" : "#888888"}
                     >
                       {sessionMenuPad(menu.bookmarkIdx === i
-                        ? `   ${menu.bookmarkMsg}`
-                        : entry.bookmarked ? "   ☑ bookmarked" : "   ☐ bookmark")}
+                        ? ` ${menu.bookmarkMsg}`
+                        : entry.bookmarked ? " ☑ bookmarked" : " ☐ bookmark")}
                     </Text>
                     <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
                   </Text>
