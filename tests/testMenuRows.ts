@@ -38,6 +38,7 @@ async function drawMenu(infoOpen: boolean) {
     topicRowOff: layout.topicRow, sessionsRowOff: layout.sessionsRow, helpRowOff: layout.helpRow, infoOpen,
     showTopicBar: true, copiedSessionIdx: -1,
     captionsIdx: -1, captionsMsg: "", bookmarkIdx: -1, bookmarkMsg: "",
+    voiceMuted: true, muteRowOff: layout.muteRow, muteMsg: "",
   };
 
   const out = new PassThrough() as unknown as NodeJS.WriteStream;
@@ -121,6 +122,15 @@ async function check(infoOpen: boolean) {
   if (at(layout.topicRow)) fail("the topic row also maps to a session");
   if (at(layout.stopwatchRow)) fail("the timer row also maps to a session");
 
+  // The mute row: drawn where the layout says, ticked as the state says (voiceMuted is
+  // true above), above the session list, and owned by no session -- a mute click that
+  // lands on a session's rows would bookmark or copy instead of silencing.
+  const muteLine = lines[layout.muteRow] ?? "";
+  if (!muteLine.includes("mute voice")) fail(`muteRow ${layout.muteRow} does not draw the mute toggle: "${muteLine.trim()}"`);
+  if (!muteLine.includes("☑")) fail(`muteRow draws unticked while voiceMuted is true: "${muteLine.trim()}"`);
+  if (at(layout.muteRow)) fail("the mute row also maps to a session");
+  if (!(layout.muteRow < layout.sessionsRow)) fail(`mute row ${layout.muteRow} is not above the session list at ${layout.sessionsRow}`);
+
   // The topic is the reason the menu gets opened, so it stays above a session list that
   // grows a block per running session. Reversing them would draw perfectly well and only
   // be noticed by whoever has to hunt for the topic on a busy day.
@@ -157,7 +167,7 @@ await check(true);
 const shut = computeMenuLayout(sessions, true, false);
 const open = computeMenuLayout(sessions, true, true);
 if (open.height !== shut.height + 1) fail(`opening the info changed the height by ${open.height - shut.height}, expected 1`);
-for (const k of ["topicRow", "sessionsRow", "stopwatchRow", "helpRow"] as const) {
+for (const k of ["topicRow", "muteRow", "sessionsRow", "stopwatchRow", "helpRow"] as const) {
   if (open[k] !== shut[k]) fail(`opening the info moved ${k} by ${open[k] - shut[k]}, expected 0`);
 }
 

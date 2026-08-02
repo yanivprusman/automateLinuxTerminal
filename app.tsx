@@ -14,6 +14,7 @@ import { SESSION_MENU_INNER, formatStopwatch, computeMenuLayout, sessionRowAt, T
 import { useMarqueeTick } from "./marquee.js";
 import { ContextMenuOverlay } from "./ContextMenuOverlay.js";
 import { clipboardWrite, clipboardRead } from "./clipboard.js";
+import { isVoiceMuted, setVoiceMuted } from "./voice.js";
 
 // The Claude Voice history window, narrowed to one session. A script rather than a URL we
 // open ourselves: it owns "raise the existing window instead of piling up duplicates", and
@@ -377,7 +378,7 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
         // top border drawn on the clicked row sat exactly over the clock it came from.
         const r = Math.max(0, Math.min(row + 1, d.rows - layout.height));
         const c = Math.max(0, Math.min(col, d.cols - menuW));
-        ctxMenuRef.current = { kind: 'automateLinuxTerminalMenu', row: r, col: c, hasSelection: false, hoverItem: -1, sessions: [...history], stopwatchDisplay: formatStopwatch(swMs), stopwatchAction: sw.running ? 'stop' : 'start', stopwatchRowOff: layout.stopwatchRow, topic: topicRef.current, editingTopic: false, editBuffer: '', topicRowOff: layout.topicRow, sessionsRowOff: layout.sessionsRow, helpRowOff: layout.helpRow, infoOpen: false, showTopicBar: showTopicBarRef.current, copiedSessionIdx: -1, captionsIdx: -1, captionsMsg: '', bookmarkIdx: -1, bookmarkMsg: '' };
+        ctxMenuRef.current = { kind: 'automateLinuxTerminalMenu', row: r, col: c, hasSelection: false, hoverItem: -1, sessions: [...history], stopwatchDisplay: formatStopwatch(swMs), stopwatchAction: sw.running ? 'stop' : 'start', stopwatchRowOff: layout.stopwatchRow, topic: topicRef.current, editingTopic: false, editBuffer: '', topicRowOff: layout.topicRow, sessionsRowOff: layout.sessionsRow, helpRowOff: layout.helpRow, infoOpen: false, showTopicBar: showTopicBarRef.current, copiedSessionIdx: -1, captionsIdx: -1, captionsMsg: '', bookmarkIdx: -1, bookmarkMsg: '', voiceMuted: isVoiceMuted(), muteRowOff: layout.muteRow, muteMsg: '' };
         if (sw.running) {
           if (swTimerRef.current) clearInterval(swTimerRef.current);
           swTimerRef.current = setInterval(() => {
@@ -398,7 +399,7 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
           const s = normalizeSelection(selection.current!);
           return !(s.startRow === s.endRow && s.startCol === s.endCol);
         })();
-        ctxMenuRef.current = { kind: 'clipboard', row: r, col: c, hasSelection: hasSel, hoverItem: -1, sessions: [], stopwatchDisplay: null, stopwatchAction: null, stopwatchRowOff: 0, topic: '', editingTopic: false, editBuffer: '', topicRowOff: 0, sessionsRowOff: -1, helpRowOff: -1, infoOpen: false, showTopicBar: false, copiedSessionIdx: -1, captionsIdx: -1, captionsMsg: '', bookmarkIdx: -1, bookmarkMsg: '' };
+        ctxMenuRef.current = { kind: 'clipboard', row: r, col: c, hasSelection: hasSel, hoverItem: -1, sessions: [], stopwatchDisplay: null, stopwatchAction: null, stopwatchRowOff: 0, topic: '', editingTopic: false, editBuffer: '', topicRowOff: 0, sessionsRowOff: -1, helpRowOff: -1, infoOpen: false, showTopicBar: false, copiedSessionIdx: -1, captionsIdx: -1, captionsMsg: '', bookmarkIdx: -1, bookmarkMsg: '', voiceMuted: false, muteRowOff: -1, muteMsg: '' };
       }
       setCtxMenu({ ...ctxMenuRef.current });
       process.stdout.write('\x1b[?1003h');
@@ -438,6 +439,7 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
                 else if (m.infoOpen && rowOff === m.helpRowOff + 1) itemIdx = 31;
                 else if (rowOff === m.topicRowOff) itemIdx = 20;
                 else if (rowOff === m.topicRowOff + 1) itemIdx = 21;
+                else if (rowOff === m.muteRowOff) itemIdx = 22;
                 else if (rowOff === m.stopwatchRowOff) itemIdx = 10;
                 else {
                   // 100 + i = the session itself (copy its id), 200 + i = its captions,
@@ -608,6 +610,7 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
                     ...m, infoOpen,
                     row: Math.max(0, Math.min(m.row, d.rows - layout.height)),
                     topicRowOff: layout.topicRow,
+                    muteRowOff: layout.muteRow,
                     sessionsRowOff: layout.sessionsRow,
                     stopwatchRowOff: layout.stopwatchRow,
                     helpRowOff: layout.helpRow,
@@ -622,6 +625,28 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
                   const upd: ContextMenuState = { ...m, showTopicBar: showTopicBarRef.current };
                   ctxMenuRef.current = upd;
                   setCtxMenu(upd);
+                  pos += sgrMatch[0].length; continue;
+                }
+                if (m.kind === 'automateLinuxTerminalMenu' && onItem && itemIdx === 22) {
+                  // The claude-voice global mute. Tick first, write through the `voice`
+                  // CLI (the one place that also cuts the line mid-sentence), and on a
+                  // refusal put the tick back and say why on the row -- the bookmark's
+                  // contract, because here too a silent no-op reads as a misclick.
+                  const next = !m.voiceMuted;
+                  const noteMute = (muted: boolean, msg: string) => {
+                    if (!ctxMenuRef.current || ctxMenuRef.current.kind !== 'automateLinuxTerminalMenu') return;
+                    const u: ContextMenuState = { ...ctxMenuRef.current, voiceMuted: muted, muteMsg: msg };
+                    ctxMenuRef.current = u;
+                    setCtxMenu(u);
+                    if (msg) setTimeout(() => {
+                      const cur = ctxMenuRef.current;
+                      if (cur?.kind === 'automateLinuxTerminalMenu' && cur.muteMsg === msg) noteMute(cur.voiceMuted, '');
+                    }, 4000);
+                  };
+                  noteMute(next, '');
+                  setVoiceMuted(next).catch((err: Error) => {
+                    noteMute(!next, `▸ ${err.message.length > 23 ? err.message.slice(0, 22) + '…' : err.message}`);
+                  });
                   pos += sgrMatch[0].length; continue;
                 }
                 if (m.kind === 'clipboard') {

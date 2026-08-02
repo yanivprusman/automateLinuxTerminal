@@ -66,6 +66,12 @@ export interface ContextMenuState {
   // instead of quietly flipping back.
   bookmarkIdx: number;
   bookmarkMsg: string;
+  // The claude-voice GLOBAL mute — the same flag the caption's button, the phone and
+  // `voice off --all` flip, re-read from the flag file every time the menu opens. The
+  // row reports failure in place (muteMsg), same contract as the bookmark row.
+  voiceMuted: boolean;
+  muteRowOff: number;
+  muteMsg: string;
 }
 
 export interface ClaudeSessionInfo {

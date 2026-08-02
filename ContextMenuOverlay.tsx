@@ -52,6 +52,20 @@ export function ContextMenuOverlay({ menu }: { menu: ContextMenuState }) {
           </Text>
           <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
         </Text>
+        {/* The claude-voice global mute — the same flag as the caption button and the
+            phone, so this box shows whatever surface last flipped it. Red when ticked:
+            a silenced voice should be visible at a glance, not discovered by waiting
+            for a sentence that never comes. */}
+        <Text>
+          <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
+          <Text
+            backgroundColor={menu.hoverItem === 22 ? "#3465a4" : "#2d2d2d"}
+            color={menu.muteMsg ? "#cc0000" : menu.voiceMuted ? "#cc0000" : "#888888"}
+          >
+            {sessionMenuPad(menu.muteMsg ? ` ${menu.muteMsg}` : menu.voiceMuted ? " ☑ mute voice" : " ☐ mute voice")}
+          </Text>
+          <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
+        </Text>
         {menu.sessions.length > 0 && (
           <>
             <Text backgroundColor="#2d2d2d" color="#888888">{`├${sessionMenuBorder}┤`}</Text>

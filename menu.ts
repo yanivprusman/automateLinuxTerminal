@@ -97,6 +97,7 @@ export function computeMenuLayout(sessions: SessionHistoryEntry[], hasStopwatch:
   row++;                         // top border
   const topicRow = row; row++;   // topic
   row++;                         // pin topic
+  const muteRow = row; row++;    // mute voice (claude-voice global mute)
   let sessionsRow = -1;
   if (sessions.length > 0) {
     row++;                       // session separator
@@ -117,7 +118,7 @@ export function computeMenuLayout(sessions: SessionHistoryEntry[], hasStopwatch:
   const helpRow = row; row++;    // the "?"
   if (infoOpen) row++;           // the info line it opens
   row++;                         // bottom border
-  return { helpRow, topicRow, sessionsRow, stopwatchRow, height: row };
+  return { helpRow, topicRow, muteRow, sessionsRow, stopwatchRow, height: row };
 }
 
 export type SessionRowAction = 'copy' | 'captions' | 'bookmark';
