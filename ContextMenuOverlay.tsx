@@ -2,11 +2,18 @@ import React from "react";
 import { Box, Text } from "ink";
 import type { ContextMenuState } from "./types.js";
 import { APP_VERSION } from "./session.js";
-import { SESSION_MENU_INNER, sessionMenuPad, sessionMenuBorder, formatElapsed, TOPIC_VIEW_WIDTH, marqueeWindow, editWindow } from "./menu.js";
+import { SESSION_MENU_INNER, sessionMenuPad, sessionMenuBorder, formatElapsed, TOPIC_VIEW_WIDTH, TOPIC_PIN_CELLS, marqueeWindow, editWindow } from "./menu.js";
 import { useMarqueeTick } from "./marquee.js";
 
-/** The topic row. A topic wider than the row is not cut off with an ellipsis — it scrolls,
- *  like a sign, so the whole of it can be read from a menu that stays 30 columns wide.
+/** The topic field: the pin box and the topic itself, on ONE row, closed off by a rule.
+ *
+ *  Setting a topic and pinning it are one thing done in two steps, and as two rows the
+ *  checkbox read as a separate setting that happened to sit nearby. Here the box is in
+ *  front of the text it pins, so what it pins needs no label — and what it does is visible
+ *  the moment it is clicked, in the sign that appears on (or leaves) the terminal.
+ *
+ *  A topic wider than the row is not cut off with an ellipsis — it scrolls, like a sign,
+ *  so the whole of it can be read from a menu that stays 30 columns wide.
  *
  *  It is its own component because it owns the scroll clock: only this row re-renders at
  *  5 Hz, and only while there is something out of view. The rest of the menu stays a still
@@ -16,19 +23,30 @@ function TopicRow({ menu }: { menu: ContextMenuState }) {
   const tick = useMarqueeTick(scrolls, menu.topic);
   // While typing, the tail is what matters (the cursor is there), so the field scrolls to
   // the cursor instead of marqueeing; the block cursor takes the last cell.
-  const body = menu.editingTopic
-    ? ` ${editWindow(menu.editBuffer, TOPIC_VIEW_WIDTH - 1)}█`
+  const field = menu.editingTopic
+    ? `${editWindow(menu.editBuffer, TOPIC_VIEW_WIDTH - 1)}█`
     : menu.topic
-      ? ` ${marqueeWindow(menu.topic, TOPIC_VIEW_WIDTH, tick)}`
-      : " set topic…";
+      ? marqueeWindow(menu.topic, TOPIC_VIEW_WIDTH, tick)
+      : "set topic…";
+  const fieldWidth = SESSION_MENU_INNER - TOPIC_PIN_CELLS;
+  // The two halves highlight separately: they do different things, and this is the only
+  // row in the menu where the pointer's column decides which. Mid-edit the whole row
+  // commits, so the whole row lights up as one.
+  const pinHover = menu.hoverItem === 21 || (menu.editingTopic && menu.hoverItem === 20);
   return (
     <Text>
       <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
       <Text
+        backgroundColor={pinHover ? "#3465a4" : "#2d2d2d"}
+        color={menu.showTopicBar ? "#ad7fa8" : "#888888"}
+      >
+        {` ${menu.showTopicBar ? "☑" : "☐"} `}
+      </Text>
+      <Text
         backgroundColor={menu.hoverItem === 20 ? "#3465a4" : "#2d2d2d"}
         color={menu.editingTopic ? "#ffffff" : (menu.topic ? "#ad7fa8" : "#666666")}
       >
-        {sessionMenuPad(body)}
+        {(field + " ".repeat(fieldWidth)).slice(0, fieldWidth)}
       </Text>
       <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
     </Text>
@@ -45,13 +63,10 @@ export function ContextMenuOverlay({ menu }: { menu: ContextMenuState }) {
       <Box position="absolute" marginTop={menu.row} marginLeft={menu.col} flexDirection="column">
         <Text backgroundColor="#2d2d2d" color="#888888">{`╭${sessionMenuBorder}╮`}</Text>
         <TopicRow menu={menu} />
-        <Text>
-          <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
-          <Text backgroundColor={menu.hoverItem === 21 ? "#3465a4" : "#2d2d2d"} color="#888888">
-            {sessionMenuPad(menu.showTopicBar ? " ☑ pin topic" : " ☐ pin topic")}
-          </Text>
-          <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
-        </Text>
+        {/* The rule that closes the topic field off. Everything under it is about
+            sessions and the app; above it there is one thing, and it now ends somewhere
+            visible instead of running into the next checkbox. */}
+        <Text backgroundColor="#2d2d2d" color="#888888">{`├${sessionMenuBorder}┤`}</Text>
         {/* The claude-voice global mute — the same flag as the caption button and the
             phone, so this box shows whatever surface last flipped it. Red when ticked:
             a silenced voice should be visible at a glance, not discovered by waiting

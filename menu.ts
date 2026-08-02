@@ -4,9 +4,26 @@ export const SESSION_MENU_INNER = 28;
 export const sessionMenuPad = (s: string) => (s + " ".repeat(SESSION_MENU_INNER)).slice(0, SESSION_MENU_INNER);
 export const sessionMenuBorder = "─".repeat(SESSION_MENU_INNER);
 
-/** Cells the topic gets inside its menu row: the row's width less the space of padding
- *  at each end. */
-export const TOPIC_VIEW_WIDTH = SESSION_MENU_INNER - 2;
+/** Cells at the head of the topic row that belong to the pin box (` ☐ `): the leading
+ *  indent every row in this menu has, the box, and the space after it. All three are the
+ *  box's hit target — a single character is too small a thing to ask a pointer to find. */
+export const TOPIC_PIN_CELLS = 3;
+
+/** Cells the topic gets inside its menu row: the row's width, less the pin box in front
+ *  of it and one cell of padding at the end. */
+export const TOPIC_VIEW_WIDTH = SESSION_MENU_INNER - TOPIC_PIN_CELLS - 1;
+
+/** What a click at `colOff` cells into the topic row means: 21 = the pin box, 20 = the
+ *  topic field. They are one row now, so the column decides, not the row.
+ *
+ *  While the field is being EDITED the whole row commits: a box that pins a topic you
+ *  have not finished typing pins the old one, which reads as the click having done
+ *  nothing. `colOff` is 1-based from the menu's left border, as the mouse handler
+ *  measures it. */
+export function topicRowItem(colOff: number, editing: boolean): 20 | 21 {
+  if (editing) return 20;
+  return colOff <= TOPIC_PIN_CELLS ? 21 : 20;
+}
 
 /** Longest topic the menu accepts. The row no longer has to HOLD the topic — one that
  *  overflows scrolls — so this is only a sanity bound on a string that also becomes a
@@ -87,6 +104,11 @@ export function formatStopwatch(ms: number): string {
  *  pushing it further down the screen. Everything below it is reference (which sessions
  *  exist) or occasional (the timer), so it can move.
  *
+ *  Its pin is not a row of its own -- the box sits IN the topic row, in front of the text
+ *  it pins, and a rule closes the field off underneath. "pin topic" on its own line read
+ *  as a second, unrelated setting; against the topic it is plainly a property OF it. The
+ *  two rows the pair used to take are still two, so nothing below shifts.
+ *
  *  The name and version are not a row -- they are behind the "?", which opens one info
  *  line in place. That "?" now sits LAST, under everything: it is the least-wanted thing
  *  in the menu, and holding the first row it pushed the topic — the most-wanted — one row
@@ -95,8 +117,8 @@ export function formatStopwatch(ms: number): string {
 export function computeMenuLayout(sessions: SessionHistoryEntry[], hasStopwatch: boolean, infoOpen: boolean) {
   let row = 0;
   row++;                         // top border
-  const topicRow = row; row++;   // topic
-  row++;                         // pin topic
+  const topicRow = row; row++;   // topic + its pin box (one row, split by column)
+  row++;                         // the rule under the topic field
   const muteRow = row; row++;    // mute voice (claude-voice global mute)
   let sessionsRow = -1;
   if (sessions.length > 0) {

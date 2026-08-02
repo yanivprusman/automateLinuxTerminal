@@ -10,7 +10,7 @@ const { Terminal: XTerminal } = xterm;
 import type { Span, Line, Selection, ContextMenuState, SessionHistoryEntry } from "./types.js";
 import { SESSION_ID, LAUNCH_DIR, SCRIPT_LOG_FILE, writeMetadata, writeTopic, writePidTopic, propagateTopicToDashboard, fetchStoredTopic, readStoredTopic, cleanupMetadata, registerWithDashboard, notifySessionEnded, detectClaudeSession, noteLiveSessionId, isPidAlive, claimHostWindow, publishWindowClaim, readBookmarkedIds, setBookmarked } from "./session.js";
 import { EMPTY_SPAN, spansEqual, normalizeSelection, readBufferRow, readBuffer } from "./buffer.js";
-import { SESSION_MENU_INNER, formatStopwatch, computeMenuLayout, sessionRowAt, TOPIC_MAX_CHARS, topicBarWidth, marqueeWindow } from "./menu.js";
+import { SESSION_MENU_INNER, formatStopwatch, computeMenuLayout, sessionRowAt, topicRowItem, TOPIC_MAX_CHARS, topicBarWidth, marqueeWindow } from "./menu.js";
 import { useMarqueeTick } from "./marquee.js";
 import { ContextMenuOverlay } from "./ContextMenuOverlay.js";
 import { clipboardWrite, clipboardRead } from "./clipboard.js";
@@ -437,8 +437,9 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
                 // it lands moves with every session that appears above it.
                 if (rowOff === m.helpRowOff) itemIdx = 30;
                 else if (m.infoOpen && rowOff === m.helpRowOff + 1) itemIdx = 31;
-                else if (rowOff === m.topicRowOff) itemIdx = 20;
-                else if (rowOff === m.topicRowOff + 1) itemIdx = 21;
+                // 20 = the topic field, 21 = its pin box. One row, split by COLUMN: the
+                // box is the first few cells, the field is the rest.
+                else if (rowOff === m.topicRowOff) itemIdx = topicRowItem(mCol - m.col, m.editingTopic);
                 else if (rowOff === m.muteRowOff) itemIdx = 22;
                 else if (rowOff === m.stopwatchRowOff) itemIdx = 10;
                 else {

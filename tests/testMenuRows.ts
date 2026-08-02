@@ -15,7 +15,7 @@ import React from "react";
 import { render, Box } from "ink";
 import { PassThrough } from "stream";
 import { ContextMenuOverlay } from "../ContextMenuOverlay.js";
-import { computeMenuLayout, sessionRowAt } from "../menu.js";
+import { computeMenuLayout, sessionRowAt, topicRowItem, TOPIC_PIN_CELLS, SESSION_MENU_INNER } from "../menu.js";
 import type { ContextMenuState, SessionHistoryEntry } from "../types.js";
 
 // Mixed on purpose: a ticked and an unticked bookmark draw different text, and both have
@@ -72,7 +72,7 @@ async function check(infoOpen: boolean) {
   lines.forEach((line, rowOff) => {
     const hit = at(rowOff);
     const isCaptionsLine = line.includes("▸ captions");
-    // "pin topic" wears the same checkbox, so match the word, not the box.
+    // The topic's pin wears the same checkbox, so match the word, not the box.
     const isBookmarkLine = /\bbookmark(ed)?\b/.test(line);
     const shortIdOn = sessions.findIndex(s => line.includes(s.sessionId.slice(0, 8)));
     const cwdOn = sessions.findIndex(s => s.cwd && line.includes(s.cwd));
@@ -117,6 +117,22 @@ async function check(infoOpen: boolean) {
   // The rows the other items live on are computed the same way and are just as easy to slip.
   const topicLine = lines[layout.topicRow] ?? "";
   if (!topicLine.includes("voice")) fail(`topicRow ${layout.topicRow} does not draw the topic: "${topicLine.trim()}"`);
+
+  // The topic and its pin are ONE row, and the column decides which half a click hits.
+  // Split them back into two rows and every column-based hit test below is wrong while
+  // still looking right, so pin the shape: box and topic on the same line, a rule under
+  // it, and no separate "pin topic" row anywhere.
+  if (!topicLine.includes("☑")) fail(`topicRow ${layout.topicRow} does not draw the pin box (showTopicBar is true): "${topicLine.trim()}"`);
+  if (lines.some(l => /pin topic/.test(l))) fail(`a separate "pin topic" row is still drawn`);
+  const ruleLine = lines[layout.topicRow + 1] ?? "";
+  if (!ruleLine.startsWith("├")) fail(`the row under the topic field is not a rule: "${ruleLine.trim()}"`);
+  // Both halves of that one row: the box is the first TOPIC_PIN_CELLS cells (1-based from
+  // the border), the field is everything after -- and mid-edit the whole row commits.
+  if (topicRowItem(1, false) !== 21) fail("a click on the leading cell of the topic row does not hit the pin");
+  if (topicRowItem(TOPIC_PIN_CELLS, false) !== 21) fail(`a click ${TOPIC_PIN_CELLS} cells in does not hit the pin`);
+  if (topicRowItem(TOPIC_PIN_CELLS + 1, false) !== 20) fail("the cell after the pin box does not hit the topic field");
+  if (topicRowItem(SESSION_MENU_INNER, false) !== 20) fail("a click at the far end of the topic row does not hit the topic field");
+  if (topicRowItem(1, true) !== 20) fail("mid-edit, a click on the pin box does not commit the topic");
   const swLine = lines[layout.stopwatchRow] ?? "";
   if (!swLine.includes("timer")) fail(`stopwatchRow ${layout.stopwatchRow} does not draw the timer: "${swLine.trim()}"`);
   if (at(layout.topicRow)) fail("the topic row also maps to a session");
