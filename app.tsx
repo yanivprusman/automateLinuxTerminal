@@ -373,7 +373,9 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
         if (sw.running) swMs += Date.now() - sw.startMs;
         const layout = computeMenuLayout(history, true, false);
         const menuW = SESSION_MENU_INNER + 2;
-        const r = Math.max(0, Math.min(row, d.rows - layout.height));
+        // One row below the click, never on it: this menu opens FROM the clock, and a
+        // top border drawn on the clicked row sat exactly over the clock it came from.
+        const r = Math.max(0, Math.min(row + 1, d.rows - layout.height));
         const c = Math.max(0, Math.min(col, d.cols - menuW));
         ctxMenuRef.current = { kind: 'automateLinuxTerminalMenu', row: r, col: c, hasSelection: false, hoverItem: -1, sessions: [...history], stopwatchDisplay: formatStopwatch(swMs), stopwatchAction: sw.running ? 'stop' : 'start', stopwatchRowOff: layout.stopwatchRow, topic: topicRef.current, editingTopic: false, editBuffer: '', topicRowOff: layout.topicRow, sessionsRowOff: layout.sessionsRow, helpRowOff: layout.helpRow, infoOpen: false, showTopicBar: showTopicBarRef.current, copiedSessionIdx: -1, captionsIdx: -1, captionsMsg: '', bookmarkIdx: -1, bookmarkMsg: '' };
         if (sw.running) {
