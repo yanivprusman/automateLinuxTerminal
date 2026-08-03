@@ -2,7 +2,7 @@ import React from "react";
 import { Box, Text } from "ink";
 import type { ContextMenuState } from "./types.js";
 import { APP_VERSION } from "./session.js";
-import { SESSION_MENU_INNER, sessionMenuPad, sessionMenuBorder, formatElapsed, TOPIC_VIEW_WIDTH, TOPIC_PIN_CELLS, marqueeWindow, editWindow } from "./menu.js";
+import { SESSION_MENU_INNER, sessionMenuPad, sessionMenuBorder, formatElapsed, TOPIC_VIEW_WIDTH, TOPIC_PIN_CELLS, SESSION_ID_LABEL, SESSION_CWD_LABEL, marqueeWindow, editWindow } from "./menu.js";
 import { useMarqueeTick } from "./marquee.js";
 
 /** The topic field: the pin box and the topic itself, on ONE row, closed off by a rule.
@@ -53,6 +53,28 @@ function TopicRow({ menu }: { menu: ContextMenuState }) {
   );
 }
 
+/** Where a session was launched from, as a scrolling sign.
+ *
+ *  A path is unbounded, the menu is not, and the old row cut the head off with a leading
+ *  "…" — which threw away exactly the part that distinguishes `/opt/dev/x` from
+ *  `/opt/prod/x`. It scrolls now, on the same clock and with the same hold-at-the-head as
+ *  the topic, so the whole of it can be read from a row that stays put.
+ *
+ *  Its own component for the same reason TopicRow is: only a row with something out of
+ *  view may run a timer, because every tick repaints a frame over a live terminal. */
+function CwdRow({ cwd, bg }: { cwd: string; bg: string }) {
+  const text = `${SESSION_CWD_LABEL} ${cwd}`;
+  const width = SESSION_MENU_INNER - 2;      // one space in from each border
+  const tick = useMarqueeTick(text.length > width, text);
+  return (
+    <Text>
+      <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
+      <Text backgroundColor={bg} color="#c4a000">{sessionMenuPad(` ${marqueeWindow(text, width, tick)}`)}</Text>
+      <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
+    </Text>
+  );
+}
+
 export function ContextMenuOverlay({ menu }: { menu: ContextMenuState }) {
   if (menu.kind === 'automateLinuxTerminalMenu') {
     const titleLeft = ' automateLinuxTerminal';
@@ -81,25 +103,24 @@ export function ContextMenuOverlay({ menu }: { menu: ContextMenuState }) {
           </Text>
           <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
         </Text>
+        {/* No rule here: the mute above and everything below it are one segment. What is
+            said aloud is one subject, and a line across it read as a change of subject. */}
         {menu.sessions.length > 0 && (
           <>
-            <Text backgroundColor="#2d2d2d" color="#888888">{`├${sessionMenuBorder}┤`}</Text>
             {menu.sessions.map((entry, i) => {
               const isCopied = menu.copiedSessionIdx === i;
               const dot = entry.alive ? '●' : '○';
               const id = entry.sessionId.slice(0, 8);
               const elapsed = formatElapsed(entry.startMs);
-              const left = ` ${dot} ${id}`;
+              // The row says what clicking it DOES, not just which session it is: both this
+              // row and the cwd under it copy the id, and nothing said so.
+              const left = ` ${dot} ${SESSION_ID_LABEL} ${id}`;
               const right = `${elapsed} `;
               const gap = SESSION_MENU_INNER - left.length - right.length;
               const normalText = left + ' '.repeat(Math.max(1, gap)) + right;
               const copiedLabel = ' copied!';
               const copiedText = copiedLabel + ' '.repeat(Math.max(0, SESSION_MENU_INNER - copiedLabel.length));
               const color = isCopied ? '#34e2e2' : entry.alive ? '#8ae234' : '#888888';
-              const cwdStr = entry.cwd || '';
-              const cwdDisplay = cwdStr.length > SESSION_MENU_INNER - 2
-                ? ` …${cwdStr.slice(-(SESSION_MENU_INNER - 4))} `
-                : ` ${cwdStr} `;
               const isHovered = menu.hoverItem === 100 + i;
               const rowBg = isCopied ? "#1a3a1a" : isHovered ? "#3465a4" : "#2d2d2d";
               return (
@@ -109,13 +130,7 @@ export function ContextMenuOverlay({ menu }: { menu: ContextMenuState }) {
                     <Text backgroundColor={rowBg} color={color}>{(isCopied ? copiedText : (normalText + ' '.repeat(SESSION_MENU_INNER))).slice(0, SESSION_MENU_INNER)}</Text>
                     <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
                   </Text>
-                  {entry.cwd && (
-                    <Text>
-                      <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
-                      <Text backgroundColor={rowBg} color="#c4a000">{sessionMenuPad(cwdDisplay)}</Text>
-                      <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
-                    </Text>
-                  )}
+                  {entry.cwd && <CwdRow cwd={entry.cwd} bg={rowBg} />}
                   {/* Everything this session has said aloud, in the Claude Voice history
                       window, narrowed to this session alone. */}
                   <Text>
@@ -125,6 +140,21 @@ export function ContextMenuOverlay({ menu }: { menu: ContextMenuState }) {
                       color={menu.captionsIdx === i ? "#34e2e2" : "#729fcf"}
                     >
                       {sessionMenuPad(menu.captionsIdx === i ? ` ${menu.captionsMsg}` : " ▸ captions")}
+                    </Text>
+                    <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
+                  </Text>
+                  {/* Say the last thing THIS session said, again — under the captions row
+                      because they are one subject read two ways: what was said, and the
+                      last of it once more. It plays even when the voice is muted (the
+                      checkbox two rows up): an explicit click is not a line arriving on
+                      its own, and refusing it silently would read as a dead row. */}
+                  <Text>
+                    <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
+                    <Text
+                      backgroundColor={menu.hoverItem === 400 + i ? "#3465a4" : "#2d2d2d"}
+                      color={menu.replayIdx === i ? "#34e2e2" : "#729fcf"}
+                    >
+                      {sessionMenuPad(menu.replayIdx === i ? ` ${menu.replayMsg}` : " ▸ replay last caption")}
                     </Text>
                     <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
                   </Text>

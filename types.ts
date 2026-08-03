@@ -61,6 +61,12 @@ export interface ContextMenuState {
   // clicked -- a menu item that silently does nothing is indistinguishable from a misclick.
   captionsIdx: number;
   captionsMsg: string;
+  // The replay row, same report-in-place contract as the captions row above it. A session
+  // that has never spoken has nothing to replay, and the row says so rather than clicking
+  // into silence -- which is indistinguishable from a broken menu when the thing you asked
+  // for is a sound.
+  replayIdx: number;
+  replayMsg: string;
   // Same contract for the bookmark line: the flag lives in the dashboard's store, so a
   // click can fail (dashboard down, session with no id yet) and the row has to say why
   // instead of quietly flipping back.

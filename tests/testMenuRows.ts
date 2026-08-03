@@ -1,6 +1,6 @@
 // The menu's hit-testing must agree with what the menu actually draws.
 //
-// Every session occupies three or four consecutive rows (id, optional cwd, captions, bookmark), and
+// Every session occupies four or five consecutive rows (id, optional cwd, captions, replay, bookmark), and
 // two separate pieces of code walk that shape: computeMenuLayout/sessionRowAt decide what a
 // click at row N means, while ContextMenuOverlay decides what row N looks like. Nothing
 // links them but arithmetic, and when they drift the failure is silent and awful -- a click
@@ -15,7 +15,7 @@ import React from "react";
 import { render, Box } from "ink";
 import { PassThrough } from "stream";
 import { ContextMenuOverlay } from "../ContextMenuOverlay.js";
-import { computeMenuLayout, sessionRowAt, topicRowItem, TOPIC_PIN_CELLS, SESSION_MENU_INNER } from "../menu.js";
+import { computeMenuLayout, sessionRowAt, topicRowItem, TOPIC_PIN_CELLS, SESSION_MENU_INNER, SESSION_ID_LABEL, SESSION_CWD_LABEL } from "../menu.js";
 import type { ContextMenuState, SessionHistoryEntry } from "../types.js";
 
 // Mixed on purpose: a ticked and an unticked bookmark draw different text, and both have
@@ -37,7 +37,7 @@ async function drawMenu(infoOpen: boolean) {
     stopwatchRowOff: layout.stopwatchRow, topic: "voice", editingTopic: false, editBuffer: "",
     topicRowOff: layout.topicRow, sessionsRowOff: layout.sessionsRow, helpRowOff: layout.helpRow, infoOpen,
     showTopicBar: true, copiedSessionIdx: -1,
-    captionsIdx: -1, captionsMsg: "", bookmarkIdx: -1, bookmarkMsg: "",
+    captionsIdx: -1, captionsMsg: "", replayIdx: -1, replayMsg: "", bookmarkIdx: -1, bookmarkMsg: "",
     voiceMuted: true, muteRowOff: layout.muteRow, muteMsg: "",
   };
 
@@ -71,22 +71,27 @@ async function check(infoOpen: boolean) {
 
   lines.forEach((line, rowOff) => {
     const hit = at(rowOff);
-    const isCaptionsLine = line.includes("▸ captions");
+    const isReplayLine = line.includes("replay last caption");
+    const isCaptionsLine = !isReplayLine && line.includes("▸ captions");
     // The topic's pin wears the same checkbox, so match the word, not the box.
     const isBookmarkLine = /\bbookmark(ed)?\b/.test(line);
     const shortIdOn = sessions.findIndex(s => line.includes(s.sessionId.slice(0, 8)));
-    const cwdOn = sessions.findIndex(s => s.cwd && line.includes(s.cwd));
+    // The cwd row is a scrolling sign, so the path itself may be part-way out of view at
+    // the moment the frame is taken -- its label is the part always on the row.
+    const isCwdLine = line.includes(SESSION_CWD_LABEL);
 
     if (isCaptionsLine) {
       if (!hit || hit.action !== "captions") fail(`row ${rowOff} draws "captions" but maps to ${JSON.stringify(hit)}`);
+    } else if (isReplayLine) {
+      if (!hit || hit.action !== "replay") fail(`row ${rowOff} draws "replay last caption" but maps to ${JSON.stringify(hit)}`);
     } else if (isBookmarkLine) {
       if (!hit || hit.action !== "bookmark") fail(`row ${rowOff} draws "bookmark" but maps to ${JSON.stringify(hit)}`);
     } else if (shortIdOn >= 0) {
       if (!hit || hit.action !== "copy" || hit.idx !== shortIdOn)
         fail(`row ${rowOff} draws session ${shortIdOn}'s id but maps to ${JSON.stringify(hit)}`);
-    } else if (cwdOn >= 0) {
-      if (!hit || hit.action !== "copy" || hit.idx !== cwdOn)
-        fail(`row ${rowOff} draws session ${cwdOn}'s cwd but maps to ${JSON.stringify(hit)}`);
+    } else if (isCwdLine) {
+      if (!hit || hit.action !== "copy")
+        fail(`row ${rowOff} draws a "${SESSION_CWD_LABEL}" line but maps to ${JSON.stringify(hit)}`);
     } else if (hit) {
       fail(`row ${rowOff} is chrome ("${line.trim().slice(0, 30)}") but maps to ${JSON.stringify(hit)}`);
     }
@@ -101,6 +106,36 @@ async function check(infoOpen: boolean) {
     const hit = at(rowOff);
     if (!hit || hit.idx !== i) fail(`captions row ${rowOff} belongs to session ${hit?.idx}, expected ${i}`);
   });
+
+  // The replay row: one per session, in that session's own block, and directly under its
+  // captions row -- the two are a pair, and a bookmark checkbox landing between them is
+  // exactly the drift this catches.
+  const replayRows = lines.map((l, i) => [l, i] as const).filter(([l]) => l.includes("replay last caption")).map(([, i]) => i);
+  console.log(`replay rows: ${replayRows.join(", ")}`);
+  if (replayRows.length !== sessions.length) fail(`${sessions.length} sessions but ${replayRows.length} replay rows`);
+  replayRows.forEach((rowOff, i) => {
+    const hit = at(rowOff);
+    if (!hit || hit.idx !== i || hit.action !== "replay") fail(`replay row ${rowOff} maps to ${JSON.stringify(hit)}, expected session ${i}`);
+    if (rowOff !== captionsRows[i] + 1) fail(`session ${i}'s replay row is at ${rowOff}, not directly under its captions row at ${captionsRows[i]}`);
+  });
+
+  // The head row has to hold ALL of it: the label, the whole 8-character id, and the
+  // elapsed time. This is what the menu's width is set from -- narrow it and the id (or
+  // the timer) is silently sliced off the end of a row that still looks fine.
+  sessions.forEach((s, i) => {
+    const rowOff = captionsRows[i] - (s.cwd ? 2 : 1);
+    const line = lines[rowOff] ?? "";
+    if (!line.includes(`${SESSION_ID_LABEL} ${s.sessionId.slice(0, 8)}`))
+      fail(`session ${i}'s head row does not draw "${SESSION_ID_LABEL} ${s.sessionId.slice(0, 8)}" uncut: "${line.trim()}"`);
+    if (!/\d+[smh]/.test(line.replace(s.sessionId.slice(0, 8), "")))
+      fail(`session ${i}'s head row lost its elapsed time to the label: "${line.trim()}"`);
+  });
+
+  // Every session that has one draws its cwd, labelled -- a bare path said nothing about
+  // being a path, and both it and the row above it copy the id.
+  const cwdRows = lines.map((l, i) => [l, i] as const).filter(([l]) => l.includes(SESSION_CWD_LABEL)).map(([, i]) => i);
+  const withCwd = sessions.filter(s => s.cwd).length;
+  if (cwdRows.length !== withCwd) fail(`${withCwd} sessions have a cwd but ${cwdRows.length} rows draw one`);
 
   // Same for the bookmark row, and the tick has to be drawn on the session that carries it —
   // a checkbox that ticks the wrong row is worse than none.
@@ -146,6 +181,12 @@ async function check(infoOpen: boolean) {
   if (!muteLine.includes("☑")) fail(`muteRow draws unticked while voiceMuted is true: "${muteLine.trim()}"`);
   if (at(layout.muteRow)) fail("the mute row also maps to a session");
   if (!(layout.muteRow < layout.sessionsRow)) fail(`mute row ${layout.muteRow} is not above the session list at ${layout.sessionsRow}`);
+  // ...and in the SAME segment as the sessions: no rule between them. The mute, the
+  // captions and the replay are one subject, and a line across it read as a change of one.
+  if (layout.sessionsRow !== layout.muteRow + 1)
+    fail(`the session list starts at ${layout.sessionsRow}, not directly under the mute row at ${layout.muteRow} — something was put back between them`);
+  if ((lines[layout.muteRow + 1] ?? "").startsWith("├"))
+    fail("a rule is drawn between the mute row and the session list; they are one segment");
 
   // The topic is the reason the menu gets opened, so it stays above a session list that
   // grows a block per running session. Reversing them would draw perfectly well and only

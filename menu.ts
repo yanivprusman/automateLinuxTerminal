@@ -1,6 +1,16 @@
 import type { SessionHistoryEntry } from "./types.js";
 
-export const SESSION_MENU_INNER = 28;
+/** Cells inside the menu's borders.
+ *
+ *  Wide enough that a session's head row holds ALL of what it says and does:
+ *  `● copy session id 90cc2dc0` plus the elapsed time on the right. At 28 it did not, and
+ *  the alternative — scrolling that row like the topic — hides the id for most of every
+ *  pass, which is the one thing the row exists to show. A path can be any length and must
+ *  scroll; a label plus eight hex characters is bounded, so it gets the room instead.
+ *
+ *  Widening this widens the topic's row AND the pinned bar with it (both are derived
+ *  below), which is the point: they must start scrolling together. */
+export const SESSION_MENU_INNER = 35;
 export const sessionMenuPad = (s: string) => (s + " ".repeat(SESSION_MENU_INNER)).slice(0, SESSION_MENU_INNER);
 export const sessionMenuBorder = "─".repeat(SESSION_MENU_INNER);
 
@@ -24,6 +34,14 @@ export function topicRowItem(colOff: number, editing: boolean): 20 | 21 {
   if (editing) return 20;
   return colOff <= TOPIC_PIN_CELLS ? 21 : 20;
 }
+
+/** What the session's two head rows say. They are labels, not decoration: `● 90cc2dc0` and
+ *  a bare path told you what the session IS, and nothing about what clicking them does —
+ *  and both rows do the same thing (copy the id), which was invisible.
+ *
+ *  Exported so the tests can find the rows by the words the menu actually draws. */
+export const SESSION_ID_LABEL = "copy session id";
+export const SESSION_CWD_LABEL = "launched from";
 
 /** Longest topic the menu accepts. The row no longer has to HOLD the topic — one that
  *  overflows scrolls — so this is only a sanity bound on a string that also becomes a
@@ -113,7 +131,14 @@ export function formatStopwatch(ms: number): string {
  *  line in place. That "?" now sits LAST, under everything: it is the least-wanted thing
  *  in the menu, and holding the first row it pushed the topic — the most-wanted — one row
  *  further from the pointer on every single open. At the bottom it also costs nothing to
- *  unfold: the info line it opens grows the menu downwards, moving no row above it. */
+ *  unfold: the info line it opens grows the menu downwards, moving no row above it.
+ *
+ *  The mute and the sessions share ONE segment, with no rule between them. Muting the
+ *  voice, opening a session's captions and replaying its last one are the same subject —
+ *  what is being said aloud — and the rule that used to sit between them read as a change
+ *  of subject where there is none. The only thing that separates them now is scope: the
+ *  mute is global (it is above every session block, not inside one), the rows under it
+ *  belong to the session whose ●/○ head begins their block. */
 export function computeMenuLayout(sessions: SessionHistoryEntry[], hasStopwatch: boolean, infoOpen: boolean) {
   let row = 0;
   row++;                         // top border
@@ -122,12 +147,12 @@ export function computeMenuLayout(sessions: SessionHistoryEntry[], hasStopwatch:
   const muteRow = row; row++;    // mute voice (claude-voice global mute)
   let sessionsRow = -1;
   if (sessions.length > 0) {
-    row++;                       // session separator
-    sessionsRow = row;
+    sessionsRow = row;           // no rule: the mute and the sessions are one segment
     for (const e of sessions) {
       row++;                     // session line
       if (e.cwd) row++;         // cwd line
       row++;                     // captions line
+      row++;                     // replay-last-caption line
       row++;                     // bookmark line
     }
   }
@@ -143,18 +168,21 @@ export function computeMenuLayout(sessions: SessionHistoryEntry[], hasStopwatch:
   return { helpRow, topicRow, muteRow, sessionsRow, stopwatchRow, height: row };
 }
 
-export type SessionRowAction = 'copy' | 'captions' | 'bookmark';
+export type SessionRowAction = 'copy' | 'captions' | 'replay' | 'bookmark';
 
 /** Which session a menu row belongs to, and what clicking it does. Every session occupies
- *  three or four consecutive rows -- the id line, an optional cwd line, the captions line
- *  and the bookmark line -- so the mapping is a walk, not arithmetic.
+ *  four or five consecutive rows -- the id line, an optional cwd line, the captions line,
+ *  the replay line and the bookmark line -- so the mapping is a walk, not arithmetic.
  *
  *  `startRow` is where the first session line is drawn, from computeMenuLayout. It is
  *  passed in rather than counted from the top because what sits above the list now varies:
  *  the "?" opens an info line, and the topic section above shifts everything with it.
  *
- *  The bookmark line is APPENDED rather than slotted in next to the id: every other
- *  placement would shift the captions row that people already click by position. */
+ *  New rows normally go on the END of a block, so nothing people click by position moves.
+ *  `replay` is the exception, and deliberately: it sits directly under `captions` because
+ *  the two are the same subject read two ways ("show me what this session said" / "say the
+ *  last of it again"), and splitting them around the bookmark would put a checkbox in the
+ *  middle of a pair. It moves the bookmark down one row, once. */
 export function sessionRowAt(
   rowOff: number,
   sessions: SessionHistoryEntry[],
@@ -170,6 +198,8 @@ export function sessionRowAt(
       row++;
     }
     if (rowOff === row) return { idx: i, action: 'captions' };
+    row++;
+    if (rowOff === row) return { idx: i, action: 'replay' };
     row++;
     if (rowOff === row) return { idx: i, action: 'bookmark' };
     row++;

@@ -21,6 +21,7 @@ import { isVoiceMuted, setVoiceMuted } from "./voice.js";
 // being a script it is re-read on every run -- that behaviour can change without rebuilding
 // this terminal.
 const VOICE_HISTORY_CMD = "/root/bin/claude-voice-history";
+const SAY_CTL_CMD = "/root/bin/say-ctl";
 
 function Clock() {
   const [now, setNow] = useState(new Date());
@@ -383,7 +384,7 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
         // top border drawn on the clicked row sat exactly over the clock it came from.
         const r = Math.max(0, Math.min(row + 1, d.rows - layout.height));
         const c = Math.max(0, Math.min(col, d.cols - menuW));
-        ctxMenuRef.current = { kind: 'automateLinuxTerminalMenu', row: r, col: c, hasSelection: false, hoverItem: -1, sessions: [...history], stopwatchDisplay: formatStopwatch(swMs), stopwatchAction: sw.running ? 'stop' : 'start', stopwatchRowOff: layout.stopwatchRow, topic: topicRef.current, editingTopic: false, editBuffer: '', topicRowOff: layout.topicRow, sessionsRowOff: layout.sessionsRow, helpRowOff: layout.helpRow, infoOpen: false, showTopicBar: showTopicBarRef.current, copiedSessionIdx: -1, captionsIdx: -1, captionsMsg: '', bookmarkIdx: -1, bookmarkMsg: '', voiceMuted: isVoiceMuted(), muteRowOff: layout.muteRow, muteMsg: '' };
+        ctxMenuRef.current = { kind: 'automateLinuxTerminalMenu', row: r, col: c, hasSelection: false, hoverItem: -1, sessions: [...history], stopwatchDisplay: formatStopwatch(swMs), stopwatchAction: sw.running ? 'stop' : 'start', stopwatchRowOff: layout.stopwatchRow, topic: topicRef.current, editingTopic: false, editBuffer: '', topicRowOff: layout.topicRow, sessionsRowOff: layout.sessionsRow, helpRowOff: layout.helpRow, infoOpen: false, showTopicBar: showTopicBarRef.current, copiedSessionIdx: -1, captionsIdx: -1, captionsMsg: '', replayIdx: -1, replayMsg: '', bookmarkIdx: -1, bookmarkMsg: '', voiceMuted: isVoiceMuted(), muteRowOff: layout.muteRow, muteMsg: '' };
         if (sw.running) {
           if (swTimerRef.current) clearInterval(swTimerRef.current);
           swTimerRef.current = setInterval(() => {
@@ -404,7 +405,7 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
           const s = normalizeSelection(selection.current!);
           return !(s.startRow === s.endRow && s.startCol === s.endCol);
         })();
-        ctxMenuRef.current = { kind: 'clipboard', row: r, col: c, hasSelection: hasSel, hoverItem: -1, sessions: [], stopwatchDisplay: null, stopwatchAction: null, stopwatchRowOff: 0, topic: '', editingTopic: false, editBuffer: '', topicRowOff: 0, sessionsRowOff: -1, helpRowOff: -1, infoOpen: false, showTopicBar: false, copiedSessionIdx: -1, captionsIdx: -1, captionsMsg: '', bookmarkIdx: -1, bookmarkMsg: '', voiceMuted: false, muteRowOff: -1, muteMsg: '' };
+        ctxMenuRef.current = { kind: 'clipboard', row: r, col: c, hasSelection: hasSel, hoverItem: -1, sessions: [], stopwatchDisplay: null, stopwatchAction: null, stopwatchRowOff: 0, topic: '', editingTopic: false, editBuffer: '', topicRowOff: 0, sessionsRowOff: -1, helpRowOff: -1, infoOpen: false, showTopicBar: false, copiedSessionIdx: -1, captionsIdx: -1, captionsMsg: '', replayIdx: -1, replayMsg: '', bookmarkIdx: -1, bookmarkMsg: '', voiceMuted: false, muteRowOff: -1, muteMsg: '' };
       }
       setCtxMenu({ ...ctxMenuRef.current });
       process.stdout.write('\x1b[?1003h');
@@ -449,10 +450,11 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
                 else if (rowOff === m.stopwatchRowOff) itemIdx = 10;
                 else {
                   // 100 + i = the session itself (copy its id), 200 + i = its captions,
-                  // 300 + i = its bookmark. Tested against what the overlay draws in
-                  // tests/testMenuRows.ts -- a drift here silently mis-routes clicks.
+                  // 300 + i = its bookmark, 400 + i = replay its last caption. Tested
+                  // against what the overlay draws in tests/testMenuRows.ts -- a drift here
+                  // silently mis-routes clicks.
                   const hit = sessionRowAt(rowOff, m.sessions, m.sessionsRowOff);
-                  const base = hit ? { copy: 100, captions: 200, bookmark: 300 }[hit.action] : 0;
+                  const base = hit ? { copy: 100, captions: 200, bookmark: 300, replay: 400 }[hit.action] : 0;
                   itemIdx = hit ? base + hit.idx : -1;
                 }
                 menuW = SESSION_MENU_INNER;
@@ -471,6 +473,44 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
               } else if (button === 0 && isPress) {
                 // Ordered high band first: 300 is also >= 200, so a bookmark click would
                 // otherwise be served by the captions branch below.
+                if (m.kind === 'automateLinuxTerminalMenu' && onItem && itemIdx >= 400) {
+                  const si = itemIdx - 400;
+                  const sessEntry = m.sessions[si];
+                  if (!sessEntry || !sessEntry.sessionId || sessEntry.sessionId === 'unknown') {
+                    closeMenu();
+                    pos += sgrMatch[0].length; continue;
+                  }
+                  const note = (msg: string, closeAfter: number) => {
+                    if (!ctxMenuRef.current || ctxMenuRef.current.kind !== 'automateLinuxTerminalMenu') return;
+                    const u: ContextMenuState = { ...ctxMenuRef.current, replayIdx: si, replayMsg: msg };
+                    ctxMenuRef.current = u;
+                    setCtxMenu(u);
+                    if (closeAfter) setTimeout(closeMenu, closeAfter);
+                  };
+                  // The voice CLI owns what a replay IS -- it re-renders the session's last
+                  // caption from the history and enqueues it past any mute -- exactly as the
+                  // history page's Replay button does. This spawns it and reports; it does
+                  // not reimplement it. stderr is piped, not discarded: "nothing spoken in
+                  // this session yet" is the common answer and belongs on the row.
+                  const child = spawn(SAY_CTL_CMD, ['replay', '--session', sessEntry.sessionId],
+                                      { detached: true, stdio: ['ignore', 'ignore', 'pipe'] });
+                  let err = '';
+                  child.stderr?.on('data', (b: Buffer) => { err += b.toString(); });
+                  // say-ctl returns once the clip is rendered and queued, not when it has
+                  // been spoken -- a long caption takes a second or two of piper. The guard
+                  // only stops a hung render from pinning the menu open.
+                  const guard = setTimeout(closeMenu, 6000);
+                  child.on('error', () => { clearTimeout(guard); note('▸ no claude-voice', 3000); });
+                  child.on('exit', code => {
+                    clearTimeout(guard);
+                    if (!code) { setTimeout(closeMenu, 400); return; }
+                    const line = (err.split('\n').find(l => l.trim()) || `failed (${code})`).trim();
+                    note('▸ ' + (line.length > 30 ? line.slice(0, 29) + '…' : line), 3400);
+                  });
+                  child.unref();
+                  note('▸ replaying…', 0);
+                  pos += sgrMatch[0].length; continue;
+                }
                 if (m.kind === 'automateLinuxTerminalMenu' && onItem && itemIdx >= 300) {
                   const si = itemIdx - 300;
                   const sessEntry = m.sessions[si];
