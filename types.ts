@@ -56,16 +56,18 @@ export interface ContextMenuState {
   infoOpen: boolean;
   showTopicBar: boolean;
   copiedSessionIdx: number;
-  // Which session's captions line is reporting something, and what it says ("opening…",
-  // or the reason it did not open). A launcher that fails must say so on the row that was
-  // clicked -- a menu item that silently does nothing is indistinguishable from a misclick.
-  captionsIdx: number;
+  // The voice segment -- the mute, the captions and the replay -- acts on THIS TAB'S
+  // session: the live one, or the last one the tab hosted (menu.ts::currentSessionId).
+  // Null when it has never hosted one, and then those rows are not drawn.
+  currentSessionId: string | null;
+  captionsRowOff: number;
+  replayRowOff: number;
+  // What the captions/replay rows are reporting, if anything ("opening…", "replaying…",
+  // or the reason it did not happen). A launcher that fails must say so on the row that
+  // was clicked -- a menu item that silently does nothing is indistinguishable from a
+  // misclick, and doubly so when the thing you asked for is a sound. Non-empty IS the
+  // "this row is reporting" state; there is one of each row, so no index is needed.
   captionsMsg: string;
-  // The replay row, same report-in-place contract as the captions row above it. A session
-  // that has never spoken has nothing to replay, and the row says so rather than clicking
-  // into silence -- which is indistinguishable from a broken menu when the thing you asked
-  // for is a sound.
-  replayIdx: number;
   replayMsg: string;
   // Same contract for the bookmark line: the flag lives in the dashboard's store, so a
   // click can fail (dashboard down, session with no id yet) and the row has to say why

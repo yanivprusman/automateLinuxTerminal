@@ -8,7 +8,7 @@ import xterm from "@xterm/headless";
 const { Terminal: XTerminal } = xterm;
 
 import type { Span, Line, Selection, ContextMenuState, SessionHistoryEntry } from "./types.js";
-import { SESSION_ID, LAUNCH_DIR, SCRIPT_LOG_FILE, writeMetadata, writeTopic, writePidTopic, propagateTopicToDashboard, fetchStoredTopic, readStoredTopic, cleanupMetadata, registerWithDashboard, notifySessionEnded, detectClaudeSession, noteLiveSessionId, isPidAlive, claimHostWindow, publishWindowClaim, readBookmarkedIds, setBookmarked } from "./session.js";
+import { SESSION_ID, LAUNCH_DIR, SCRIPT_LOG_FILE, writeMetadata, writeTopic, writePidTopic, propagateTopicToDashboard, fetchStoredTopic, readStoredTopic, cleanupMetadata, registerWithDashboard, notifySessionEnded, detectClaudeSession, noteLiveSessionId, currentSessionId, isPidAlive, claimHostWindow, publishWindowClaim, readBookmarkedIds, setBookmarked } from "./session.js";
 import { EMPTY_SPAN, spansEqual, normalizeSelection, readBufferRow, readBuffer } from "./buffer.js";
 import { SESSION_MENU_INNER, formatStopwatch, computeMenuLayout, sessionRowAt, topicRowItem, TOPIC_MAX_CHARS, topicBarWidth, marqueeWindow } from "./menu.js";
 import { useMarqueeTick } from "./marquee.js";
@@ -375,6 +375,12 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
         // showing this tab's last opinion of it would be wrong on sight.
         const bookmarkedIds = readBookmarkedIds();
         for (const entry of history) entry.bookmarked = bookmarkedIds.has(entry.sessionId);
+        // Who the voice segment (captions, replay) is about. currentSessionId() is the
+        // ONE authority on "the session in this tab" -- never re-derive it from the list
+        // below. It is empty only when no claude is running here now, and then the tab's
+        // own last session is the one whose captions you mean: it just ended in front of
+        // you, and "replay the last thing it said" is at its most wanted right then.
+        const voiceSessionId = currentSessionId() || history[history.length - 1]?.sessionId || null;
         const sw = stopwatchRef.current;
         let swMs = sw.accumulatedMs;
         if (sw.running) swMs += Date.now() - sw.startMs;
@@ -384,7 +390,7 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
         // top border drawn on the clicked row sat exactly over the clock it came from.
         const r = Math.max(0, Math.min(row + 1, d.rows - layout.height));
         const c = Math.max(0, Math.min(col, d.cols - menuW));
-        ctxMenuRef.current = { kind: 'automateLinuxTerminalMenu', row: r, col: c, hasSelection: false, hoverItem: -1, sessions: [...history], stopwatchDisplay: formatStopwatch(swMs), stopwatchAction: sw.running ? 'stop' : 'start', stopwatchRowOff: layout.stopwatchRow, topic: topicRef.current, editingTopic: false, editBuffer: '', topicRowOff: layout.topicRow, sessionsRowOff: layout.sessionsRow, helpRowOff: layout.helpRow, infoOpen: false, showTopicBar: showTopicBarRef.current, copiedSessionIdx: -1, captionsIdx: -1, captionsMsg: '', replayIdx: -1, replayMsg: '', bookmarkIdx: -1, bookmarkMsg: '', voiceMuted: isVoiceMuted(), muteRowOff: layout.muteRow, muteMsg: '' };
+        ctxMenuRef.current = { kind: 'automateLinuxTerminalMenu', row: r, col: c, hasSelection: false, hoverItem: -1, sessions: [...history], stopwatchDisplay: formatStopwatch(swMs), stopwatchAction: sw.running ? 'stop' : 'start', stopwatchRowOff: layout.stopwatchRow, topic: topicRef.current, editingTopic: false, editBuffer: '', topicRowOff: layout.topicRow, sessionsRowOff: layout.sessionsRow, helpRowOff: layout.helpRow, infoOpen: false, showTopicBar: showTopicBarRef.current, copiedSessionIdx: -1, currentSessionId: voiceSessionId, captionsRowOff: layout.captionsRow, replayRowOff: layout.replayRow, captionsMsg: '', replayMsg: '', bookmarkIdx: -1, bookmarkMsg: '', voiceMuted: isVoiceMuted(), muteRowOff: layout.muteRow, muteMsg: '' };
         if (sw.running) {
           if (swTimerRef.current) clearInterval(swTimerRef.current);
           swTimerRef.current = setInterval(() => {
@@ -405,7 +411,7 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
           const s = normalizeSelection(selection.current!);
           return !(s.startRow === s.endRow && s.startCol === s.endCol);
         })();
-        ctxMenuRef.current = { kind: 'clipboard', row: r, col: c, hasSelection: hasSel, hoverItem: -1, sessions: [], stopwatchDisplay: null, stopwatchAction: null, stopwatchRowOff: 0, topic: '', editingTopic: false, editBuffer: '', topicRowOff: 0, sessionsRowOff: -1, helpRowOff: -1, infoOpen: false, showTopicBar: false, copiedSessionIdx: -1, captionsIdx: -1, captionsMsg: '', replayIdx: -1, replayMsg: '', bookmarkIdx: -1, bookmarkMsg: '', voiceMuted: false, muteRowOff: -1, muteMsg: '' };
+        ctxMenuRef.current = { kind: 'clipboard', row: r, col: c, hasSelection: hasSel, hoverItem: -1, sessions: [], stopwatchDisplay: null, stopwatchAction: null, stopwatchRowOff: 0, topic: '', editingTopic: false, editBuffer: '', topicRowOff: 0, sessionsRowOff: -1, helpRowOff: -1, infoOpen: false, showTopicBar: false, copiedSessionIdx: -1, currentSessionId: null, captionsRowOff: -1, replayRowOff: -1, captionsMsg: '', replayMsg: '', bookmarkIdx: -1, bookmarkMsg: '', voiceMuted: false, muteRowOff: -1, muteMsg: '' };
       }
       setCtxMenu({ ...ctxMenuRef.current });
       process.stdout.write('\x1b[?1003h');
@@ -446,15 +452,19 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
                 // 20 = the topic field, 21 = its pin box. One row, split by COLUMN: the
                 // box is the first few cells, the field is the rest.
                 else if (rowOff === m.topicRowOff) itemIdx = topicRowItem(mCol - m.col, m.editingTopic);
+                // 22/23/24 = the voice segment: mute, captions, replay. All three act on
+                // one session (m.currentSessionId), so they are single items like the
+                // topic -- not a band indexed by which block was clicked.
                 else if (rowOff === m.muteRowOff) itemIdx = 22;
+                else if (m.captionsRowOff >= 0 && rowOff === m.captionsRowOff) itemIdx = 23;
+                else if (m.replayRowOff >= 0 && rowOff === m.replayRowOff) itemIdx = 24;
                 else if (rowOff === m.stopwatchRowOff) itemIdx = 10;
                 else {
-                  // 100 + i = the session itself (copy its id), 200 + i = its captions,
-                  // 300 + i = its bookmark, 400 + i = replay its last caption. Tested
-                  // against what the overlay draws in tests/testMenuRows.ts -- a drift here
-                  // silently mis-routes clicks.
+                  // 100 + i = the session itself (copy its id), 300 + i = its bookmark.
+                  // Tested against what the overlay draws in tests/testMenuRows.ts -- a
+                  // drift here silently mis-routes clicks.
                   const hit = sessionRowAt(rowOff, m.sessions, m.sessionsRowOff);
-                  const base = hit ? { copy: 100, captions: 200, bookmark: 300, replay: 400 }[hit.action] : 0;
+                  const base = hit ? { copy: 100, bookmark: 300 }[hit.action] : 0;
                   itemIdx = hit ? base + hit.idx : -1;
                 }
                 menuW = SESSION_MENU_INNER;
@@ -471,18 +481,15 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
                   setCtxMenu(updated);
                 }
               } else if (button === 0 && isPress) {
-                // Ordered high band first: 300 is also >= 200, so a bookmark click would
-                // otherwise be served by the captions branch below.
-                if (m.kind === 'automateLinuxTerminalMenu' && onItem && itemIdx >= 400) {
-                  const si = itemIdx - 400;
-                  const sessEntry = m.sessions[si];
-                  if (!sessEntry || !sessEntry.sessionId || sessEntry.sessionId === 'unknown') {
+                if (m.kind === 'automateLinuxTerminalMenu' && onItem && itemIdx === 24) {
+                  const sessionId = m.currentSessionId;
+                  if (!sessionId) {
                     closeMenu();
                     pos += sgrMatch[0].length; continue;
                   }
                   const note = (msg: string, closeAfter: number) => {
                     if (!ctxMenuRef.current || ctxMenuRef.current.kind !== 'automateLinuxTerminalMenu') return;
-                    const u: ContextMenuState = { ...ctxMenuRef.current, replayIdx: si, replayMsg: msg };
+                    const u: ContextMenuState = { ...ctxMenuRef.current, replayMsg: msg };
                     ctxMenuRef.current = u;
                     setCtxMenu(u);
                     if (closeAfter) setTimeout(closeMenu, closeAfter);
@@ -492,7 +499,7 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
                   // history page's Replay button does. This spawns it and reports; it does
                   // not reimplement it. stderr is piped, not discarded: "nothing spoken in
                   // this session yet" is the common answer and belongs on the row.
-                  const child = spawn(SAY_CTL_CMD, ['replay', '--session', sessEntry.sessionId],
+                  const child = spawn(SAY_CTL_CMD, ['replay', '--session', sessionId],
                                       { detached: true, stdio: ['ignore', 'ignore', 'pipe'] });
                   let err = '';
                   child.stderr?.on('data', (b: Buffer) => { err += b.toString(); });
@@ -549,13 +556,12 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
                   }
                   pos += sgrMatch[0].length; continue;
                 }
-                if (m.kind === 'automateLinuxTerminalMenu' && onItem && itemIdx >= 200) {
-                  const si = itemIdx - 200;
-                  const sessEntry = m.sessions[si];
-                  if (sessEntry) {
+                if (m.kind === 'automateLinuxTerminalMenu' && onItem && itemIdx === 23) {
+                  const sessionId = m.currentSessionId;
+                  if (sessionId) {
                     const note = (msg: string, closeAfter: number) => {
                       if (!ctxMenuRef.current || ctxMenuRef.current.kind !== 'automateLinuxTerminalMenu') return;
-                      const u: ContextMenuState = { ...ctxMenuRef.current, captionsIdx: si, captionsMsg: msg };
+                      const u: ContextMenuState = { ...ctxMenuRef.current, captionsMsg: msg };
                       ctxMenuRef.current = u;
                       setCtxMenu(u);
                       if (closeAfter) setTimeout(closeMenu, closeAfter);
@@ -564,7 +570,7 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
                     // PIPED, not discarded. The launcher refuses loudly (no port from the
                     // daemon, unreachable voice server) and swallowing that would leave the
                     // row saying "opening…" while nothing ever opened.
-                    const child = spawn(VOICE_HISTORY_CMD, ['--session', sessEntry.sessionId],
+                    const child = spawn(VOICE_HISTORY_CMD, ['--session', sessionId],
                                         { detached: true, stdio: ['ignore', 'ignore', 'pipe'] });
                     let err = '';
                     child.stderr?.on('data', (b: Buffer) => { err += b.toString(); });

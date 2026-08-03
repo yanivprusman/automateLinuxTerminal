@@ -133,26 +133,33 @@ export function formatStopwatch(ms: number): string {
  *  further from the pointer on every single open. At the bottom it also costs nothing to
  *  unfold: the info line it opens grows the menu downwards, moving no row above it.
  *
- *  The mute and the sessions share ONE segment, with no rule between them. Muting the
- *  voice, opening a session's captions and replaying its last one are the same subject —
- *  what is being said aloud — and the rule that used to sit between them read as a change
- *  of subject where there is none. The only thing that separates them now is scope: the
- *  mute is global (it is above every session block, not inside one), the rows under it
- *  belong to the session whose ●/○ head begins their block. */
+ *  The three voice rows are ONE segment of their own: the mute, the captions, and the
+ *  replay. What is said aloud is a subject, and it is now grouped as one — reading down
+ *  the segment gives you the whole of it (silence it / read it / hear it again) without
+ *  the eye having to collect three rows from three places.
+ *
+ *  They act on THIS TAB'S session (`currentSessionId`), which is why they can be one row
+ *  each instead of one per session block: a tab hosts one live claude, and the captions
+ *  you want are its. They are drawn only when this tab has hosted a session at all —
+ *  rows that narrow a caption window to nothing are not worth their space. */
 export function computeMenuLayout(sessions: SessionHistoryEntry[], hasStopwatch: boolean, infoOpen: boolean) {
   let row = 0;
   row++;                         // top border
   const topicRow = row; row++;   // topic + its pin box (one row, split by column)
   row++;                         // the rule under the topic field
   const muteRow = row; row++;    // mute voice (claude-voice global mute)
+  let captionsRow = -1, replayRow = -1;
+  if (sessions.length > 0) {
+    captionsRow = row; row++;    // this tab's captions
+    replayRow = row; row++;      // ...and the last of them, again
+  }
   let sessionsRow = -1;
   if (sessions.length > 0) {
-    sessionsRow = row;           // no rule: the mute and the sessions are one segment
+    row++;                       // rule closing the voice segment off
+    sessionsRow = row;
     for (const e of sessions) {
       row++;                     // session line
       if (e.cwd) row++;         // cwd line
-      row++;                     // captions line
-      row++;                     // replay-last-caption line
       row++;                     // bookmark line
     }
   }
@@ -165,24 +172,23 @@ export function computeMenuLayout(sessions: SessionHistoryEntry[], hasStopwatch:
   const helpRow = row; row++;    // the "?"
   if (infoOpen) row++;           // the info line it opens
   row++;                         // bottom border
-  return { helpRow, topicRow, muteRow, sessionsRow, stopwatchRow, height: row };
+  return { helpRow, topicRow, muteRow, captionsRow, replayRow, sessionsRow, stopwatchRow, height: row };
 }
 
-export type SessionRowAction = 'copy' | 'captions' | 'replay' | 'bookmark';
+export type SessionRowAction = 'copy' | 'bookmark';
 
 /** Which session a menu row belongs to, and what clicking it does. Every session occupies
- *  four or five consecutive rows -- the id line, an optional cwd line, the captions line,
- *  the replay line and the bookmark line -- so the mapping is a walk, not arithmetic.
+ *  two or three consecutive rows -- the id line, an optional cwd line and the bookmark
+ *  line -- so the mapping is a walk, not arithmetic.
  *
  *  `startRow` is where the first session line is drawn, from computeMenuLayout. It is
  *  passed in rather than counted from the top because what sits above the list now varies:
- *  the "?" opens an info line, and the topic section above shifts everything with it.
+ *  the "?" opens an info line, and the topic and voice sections above shift everything.
  *
- *  New rows normally go on the END of a block, so nothing people click by position moves.
- *  `replay` is the exception, and deliberately: it sits directly under `captions` because
- *  the two are the same subject read two ways ("show me what this session said" / "say the
- *  last of it again"), and splitting them around the bookmark would put a checkbox in the
- *  middle of a pair. It moves the bookmark down one row, once. */
+ *  A new row goes on the END of the block -- any other placement shifts a row people
+ *  already click by position. The captions and replay rows used to live here, one pair per
+ *  block; they are one pair in the voice segment above now, so what is left in a block is
+ *  what is true of a session rather than of its voice. */
 export function sessionRowAt(
   rowOff: number,
   sessions: SessionHistoryEntry[],
@@ -197,10 +203,6 @@ export function sessionRowAt(
       if (rowOff === row) return { idx: i, action: 'copy' };
       row++;
     }
-    if (rowOff === row) return { idx: i, action: 'captions' };
-    row++;
-    if (rowOff === row) return { idx: i, action: 'replay' };
-    row++;
     if (rowOff === row) return { idx: i, action: 'bookmark' };
     row++;
   }

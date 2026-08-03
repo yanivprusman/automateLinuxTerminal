@@ -37,7 +37,8 @@ async function drawMenu(infoOpen: boolean) {
     stopwatchRowOff: layout.stopwatchRow, topic: "voice", editingTopic: false, editBuffer: "",
     topicRowOff: layout.topicRow, sessionsRowOff: layout.sessionsRow, helpRowOff: layout.helpRow, infoOpen,
     showTopicBar: true, copiedSessionIdx: -1,
-    captionsIdx: -1, captionsMsg: "", replayIdx: -1, replayMsg: "", bookmarkIdx: -1, bookmarkMsg: "",
+    currentSessionId: sessions[0].sessionId, captionsRowOff: layout.captionsRow, replayRowOff: layout.replayRow,
+    captionsMsg: "", replayMsg: "", bookmarkIdx: -1, bookmarkMsg: "",
     voiceMuted: true, muteRowOff: layout.muteRow, muteMsg: "",
   };
 
@@ -80,10 +81,10 @@ async function check(infoOpen: boolean) {
     // the moment the frame is taken -- its label is the part always on the row.
     const isCwdLine = line.includes(SESSION_CWD_LABEL);
 
-    if (isCaptionsLine) {
-      if (!hit || hit.action !== "captions") fail(`row ${rowOff} draws "captions" but maps to ${JSON.stringify(hit)}`);
-    } else if (isReplayLine) {
-      if (!hit || hit.action !== "replay") fail(`row ${rowOff} draws "replay last caption" but maps to ${JSON.stringify(hit)}`);
+    if (isCaptionsLine || isReplayLine) {
+      // They belong to the voice segment above the list now, not to a block. Mapping to a
+      // session again would mean a click on one of them copying an id or ticking a box.
+      if (hit) fail(`row ${rowOff} draws a voice row but maps to a session: ${JSON.stringify(hit)}`);
     } else if (isBookmarkLine) {
       if (!hit || hit.action !== "bookmark") fail(`row ${rowOff} draws "bookmark" but maps to ${JSON.stringify(hit)}`);
     } else if (shortIdOn >= 0) {
@@ -97,34 +98,32 @@ async function check(infoOpen: boolean) {
     }
   });
 
-  // Each session must own exactly one captions row, in its own block -- three sessions
-  // sharing one captions line would still pass the per-row checks above.
+  // THE VOICE SEGMENT: mute, captions, replay — three consecutive rows, one of each, in
+  // that order, with a rule under them and none of them belonging to a session block.
+  // They were a pair inside every block before; grouping them is the whole point of this
+  // shape, and "one captions row per session" reappearing is what would undo it.
   const captionsRows = lines.map((l, i) => [l, i] as const).filter(([l]) => l.includes("▸ captions")).map(([, i]) => i);
-  console.log(`captions rows: ${captionsRows.join(", ")}`);
-  if (captionsRows.length !== sessions.length) fail(`${sessions.length} sessions but ${captionsRows.length} captions rows`);
-  captionsRows.forEach((rowOff, i) => {
-    const hit = at(rowOff);
-    if (!hit || hit.idx !== i) fail(`captions row ${rowOff} belongs to session ${hit?.idx}, expected ${i}`);
-  });
-
-  // The replay row: one per session, in that session's own block, and directly under its
-  // captions row -- the two are a pair, and a bookmark checkbox landing between them is
-  // exactly the drift this catches.
   const replayRows = lines.map((l, i) => [l, i] as const).filter(([l]) => l.includes("replay last caption")).map(([, i]) => i);
-  console.log(`replay rows: ${replayRows.join(", ")}`);
-  if (replayRows.length !== sessions.length) fail(`${sessions.length} sessions but ${replayRows.length} replay rows`);
-  replayRows.forEach((rowOff, i) => {
-    const hit = at(rowOff);
-    if (!hit || hit.idx !== i || hit.action !== "replay") fail(`replay row ${rowOff} maps to ${JSON.stringify(hit)}, expected session ${i}`);
-    if (rowOff !== captionsRows[i] + 1) fail(`session ${i}'s replay row is at ${rowOff}, not directly under its captions row at ${captionsRows[i]}`);
-  });
+  console.log(`voice segment — mute: ${layout.muteRow}, captions: ${captionsRows.join(",")}, replay: ${replayRows.join(",")}`);
+  if (captionsRows.length !== 1) fail(`expected exactly one captions row, drew ${captionsRows.length}`);
+  if (replayRows.length !== 1) fail(`expected exactly one replay row, drew ${replayRows.length}`);
+  if (captionsRows[0] !== layout.captionsRow) fail(`captions drawn at ${captionsRows[0]} but the layout says ${layout.captionsRow}`);
+  if (replayRows[0] !== layout.replayRow) fail(`replay drawn at ${replayRows[0]} but the layout says ${layout.replayRow}`);
+  if (layout.captionsRow !== layout.muteRow + 1)
+    fail(`captions at ${layout.captionsRow} is not directly under the mute at ${layout.muteRow} — the voice rows are split up`);
+  if (layout.replayRow !== layout.captionsRow + 1)
+    fail(`replay at ${layout.replayRow} is not directly under captions at ${layout.captionsRow}`);
+  if (at(layout.captionsRow) || at(layout.replayRow)) fail("a voice row maps to a session block");
+  if (!(lines[layout.replayRow + 1] ?? "").startsWith("├"))
+    fail(`the voice segment is not closed off by a rule: row ${layout.replayRow + 1} is "${(lines[layout.replayRow + 1] ?? "").trim()}"`);
 
   // The head row has to hold ALL of it: the label, the whole 8-character id, and the
   // elapsed time. This is what the menu's width is set from -- narrow it and the id (or
   // the timer) is silently sliced off the end of a row that still looks fine.
+  const headRows = lines.map((l, i) => [l, i] as const).filter(([l]) => l.includes(SESSION_ID_LABEL)).map(([, i]) => i);
+  if (headRows.length !== sessions.length) fail(`${sessions.length} sessions but ${headRows.length} head rows`);
   sessions.forEach((s, i) => {
-    const rowOff = captionsRows[i] - (s.cwd ? 2 : 1);
-    const line = lines[rowOff] ?? "";
+    const line = lines[headRows[i]] ?? "";
     if (!line.includes(`${SESSION_ID_LABEL} ${s.sessionId.slice(0, 8)}`))
       fail(`session ${i}'s head row does not draw "${SESSION_ID_LABEL} ${s.sessionId.slice(0, 8)}" uncut: "${line.trim()}"`);
     if (!/\d+[smh]/.test(line.replace(s.sessionId.slice(0, 8), "")))
@@ -181,12 +180,11 @@ async function check(infoOpen: boolean) {
   if (!muteLine.includes("☑")) fail(`muteRow draws unticked while voiceMuted is true: "${muteLine.trim()}"`);
   if (at(layout.muteRow)) fail("the mute row also maps to a session");
   if (!(layout.muteRow < layout.sessionsRow)) fail(`mute row ${layout.muteRow} is not above the session list at ${layout.sessionsRow}`);
-  // ...and in the SAME segment as the sessions: no rule between them. The mute, the
-  // captions and the replay are one subject, and a line across it read as a change of one.
-  if (layout.sessionsRow !== layout.muteRow + 1)
-    fail(`the session list starts at ${layout.sessionsRow}, not directly under the mute row at ${layout.muteRow} — something was put back between them`);
-  if ((lines[layout.muteRow + 1] ?? "").startsWith("├"))
-    fail("a rule is drawn between the mute row and the session list; they are one segment");
+  // ...and it heads the voice segment: the captions and replay rows sit under it with no
+  // rule between them (asserted in the voice-segment block above), and the session list
+  // starts only after that segment is closed off.
+  if (layout.sessionsRow !== layout.replayRow + 2)
+    fail(`the session list starts at ${layout.sessionsRow}; expected the row after the voice segment's rule (${layout.replayRow + 2})`);
 
   // The topic is the reason the menu gets opened, so it stays above a session list that
   // grows a block per running session. Reversing them would draw perfectly well and only

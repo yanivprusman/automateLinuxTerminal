@@ -103,10 +103,42 @@ export function ContextMenuOverlay({ menu }: { menu: ContextMenuState }) {
           </Text>
           <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
         </Text>
-        {/* No rule here: the mute above and everything below it are one segment. What is
-            said aloud is one subject, and a line across it read as a change of subject. */}
+        {/* The other two thirds of the voice segment: everything this tab's session has
+            said aloud (the Claude Voice history window, narrowed to it), and the last of
+            it again. One row each, not one per session block — a tab hosts one live
+            claude, and its voice is the voice this menu is about.
+
+            Replay plays even when the box above is ticked: an explicit click is not a
+            line arriving on its own, and refusing it silently would read as a dead row. */}
         {menu.sessions.length > 0 && (
           <>
+            <Text>
+              <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
+              <Text
+                backgroundColor={menu.hoverItem === 23 ? "#3465a4" : "#2d2d2d"}
+                color={menu.captionsMsg ? "#34e2e2" : "#729fcf"}
+              >
+                {sessionMenuPad(menu.captionsMsg ? ` ${menu.captionsMsg}` : " ▸ captions")}
+              </Text>
+              <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
+            </Text>
+            <Text>
+              <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
+              <Text
+                backgroundColor={menu.hoverItem === 24 ? "#3465a4" : "#2d2d2d"}
+                color={menu.replayMsg ? "#34e2e2" : "#729fcf"}
+              >
+                {sessionMenuPad(menu.replayMsg ? ` ${menu.replayMsg}` : " ▸ replay last caption")}
+              </Text>
+              <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
+            </Text>
+          </>
+        )}
+        {menu.sessions.length > 0 && (
+          <>
+            {/* The rule that closes the voice segment off. Below it a block per session:
+                what a session IS, not what it says. */}
+            <Text backgroundColor="#2d2d2d" color="#888888">{`├${sessionMenuBorder}┤`}</Text>
             {menu.sessions.map((entry, i) => {
               const isCopied = menu.copiedSessionIdx === i;
               const dot = entry.alive ? '●' : '○';
@@ -131,33 +163,6 @@ export function ContextMenuOverlay({ menu }: { menu: ContextMenuState }) {
                     <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
                   </Text>
                   {entry.cwd && <CwdRow cwd={entry.cwd} bg={rowBg} />}
-                  {/* Everything this session has said aloud, in the Claude Voice history
-                      window, narrowed to this session alone. */}
-                  <Text>
-                    <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
-                    <Text
-                      backgroundColor={menu.hoverItem === 200 + i ? "#3465a4" : "#2d2d2d"}
-                      color={menu.captionsIdx === i ? "#34e2e2" : "#729fcf"}
-                    >
-                      {sessionMenuPad(menu.captionsIdx === i ? ` ${menu.captionsMsg}` : " ▸ captions")}
-                    </Text>
-                    <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
-                  </Text>
-                  {/* Say the last thing THIS session said, again — under the captions row
-                      because they are one subject read two ways: what was said, and the
-                      last of it once more. It plays even when the voice is muted (the
-                      checkbox two rows up): an explicit click is not a line arriving on
-                      its own, and refusing it silently would read as a dead row. */}
-                  <Text>
-                    <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
-                    <Text
-                      backgroundColor={menu.hoverItem === 400 + i ? "#3465a4" : "#2d2d2d"}
-                      color={menu.replayIdx === i ? "#34e2e2" : "#729fcf"}
-                    >
-                      {sessionMenuPad(menu.replayIdx === i ? ` ${menu.replayMsg}` : " ▸ replay last caption")}
-                    </Text>
-                    <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
-                  </Text>
                   {/* Keep this session — the dashboard's own bookmark flag, so a session
                       ticked here is the one its "Bookmarked" filter lists. Drawn with the
                       same checkbox as "pin topic" below: both are state, not actions —
