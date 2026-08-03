@@ -155,11 +155,14 @@ export async function claimHostWindow(
   }
 
   // The nonce never appeared, so this window's title is not ours to set: a window
-  // opened with `ptyxis --new-window -T <title>` (how the dashboard launches and
-  // resumes sessions) keeps that title and ignores the OSC titles we write. Those
-  // titles carry a freshly minted session id, so at STARTUP — before any resume can
-  // leave a same-titled twin behind — matching one is still an identification, not
-  // a guess. windowIdByTitle insists on a unique match either way.
+  // opened with `ptyxis --new-window -T <title>` keeps that title and ignores the
+  // OSC titles we write. The dashboard launched every session that way until
+  // 2026-08-03 (its login shell now writes the same title as an OSC instead,
+  // exactly so this app can rename the window to the session's name), and a tab
+  // the user renamed in Ptyxis behaves the same. Those titles carry a freshly
+  // minted session id, so at STARTUP — before any resume can leave a same-titled
+  // twin behind — matching one is still an identification, not a guess.
+  // windowIdByTitle insists on a unique match either way.
   const given = [SESSION_ID && `claude-${SESSION_ID}`, TMUX_SESSION].filter(Boolean) as string[];
   if (!given.length) return '';
   for (let i = 0; i < 10; i++) {

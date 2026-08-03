@@ -173,8 +173,13 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
     //   - no Claude session -> forward child titles as-is (so `cl`'s launch-time
     //     title, used for its own windowId lookup, propagates too).
     let hostTitle = "";
-    const setHostTitle = (t: string) => {
-      if (t && t !== hostTitle) {
+    // `force` re-asserts a title this app already believes it set. Without it the
+    // remembered value made the title write-once-per-value: anything else that
+    // retitled the window (a launcher, a stray OSC from a program the pty did not
+    // capture) owned it from then on, because the next sync saw "no change" and
+    // wrote nothing. An OSC occupies no cells, so re-stating it costs nothing.
+    const setHostTitle = (t: string, force = false) => {
+      if (t && (force || t !== hostTitle)) {
         hostTitle = t;
         process.stdout.write(`\x1b]2;${t}\x07`);
       }
@@ -210,7 +215,7 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
       // Runs every 5s, so a topic set or cleared anywhere — this tab's menu, the
       // dashboard card, the phone, the set-topic skill — reaches the title too
       // without every one of those paths having to know about the window.
-      setHostTitle(pinnedTitle() || childTitle);
+      setHostTitle(pinnedTitle() || childTitle, true);
     };
     syncClaudeTitle();
     const titleSyncId = setInterval(syncClaudeTitle, 5000);
