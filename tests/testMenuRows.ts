@@ -29,7 +29,7 @@ const sessions: SessionHistoryEntry[] = [
 let failures = 0;
 const fail = (msg: string) => { failures++; console.log("  FAIL " + msg); };
 
-async function drawMenu(infoOpen: boolean) {
+async function drawMenu(infoOpen: boolean, voiceMutedAll = false) {
   const layout = computeMenuLayout(sessions, true, infoOpen);
   const menu: ContextMenuState = {
     kind: "automateLinuxTerminalMenu", row: 0, col: 0, hasSelection: false, hoverItem: -1,
@@ -39,7 +39,7 @@ async function drawMenu(infoOpen: boolean) {
     showTopicBar: true, copiedSessionIdx: -1,
     currentSessionId: sessions[0].sessionId, captionsRowOff: layout.captionsRow, replayRowOff: layout.replayRow,
     captionsMsg: "", replayMsg: "", bookmarkIdx: -1, bookmarkMsg: "",
-    voiceMuted: true, muteRowOff: layout.muteRow, muteMsg: "",
+    voiceMuted: true, voiceMutedAll, muteRowOff: layout.muteRow, muteMsg: "",
   };
 
   const out = new PassThrough() as unknown as NodeJS.WriteStream;
@@ -180,6 +180,9 @@ async function check(infoOpen: boolean) {
   if (!muteLine.includes("☑")) fail(`muteRow draws unticked while voiceMuted is true: "${muteLine.trim()}"`);
   if (at(layout.muteRow)) fail("the mute row also maps to a session");
   if (!(layout.muteRow < layout.sessionsRow)) fail(`mute row ${layout.muteRow} is not above the session list at ${layout.sessionsRow}`);
+  // It says NOTHING about all sessions while only this one is muted. The row silences the
+  // tab it is in; a global mute is someone else's setting and only appears when it is on.
+  if (/\ball\b/.test(muteLine)) fail(`muteRow claims a global scope with voiceMutedAll false: "${muteLine.trim()}"`);
   // ...and it heads the voice segment: the captions and replay rows sit under it with no
   // rule between them (asserted in the voice-segment block above), and the session list
   // starts only after that segment is closed off.
@@ -214,6 +217,29 @@ async function check(infoOpen: boolean) {
 
 await check(false);
 await check(true);
+
+// THE MUTE'S SCOPE, as the row draws it.
+//
+// This checkbox is one of three rows that act on the tab's own session, and it is the only
+// one that ever reached past it: it used to write the single global flag, so ticking it in
+// one terminal silenced the dashboard, the phone and every other terminal, with nothing on
+// the row admitting it. The layout now puts it INSIDE the voice segment -- with no session
+// there is no session to mute, and "mute" must never widen into "mute everyone" just to
+// have something to do.
+{
+  const none = computeMenuLayout([], true, false);
+  if (none.muteRow !== -1) fail(`with no sessions the mute row is still laid out at ${none.muteRow}`);
+  if (none.captionsRow !== -1 || none.replayRow !== -1) fail("the rest of the voice segment is drawn with no sessions");
+
+  // A global mute is DISCLOSED, not absorbed. The box keeps reporting this session's own
+  // flag -- ticking it for someone else's setting makes the next click a silent no-op --
+  // and the row says why the voice is quiet anyway.
+  const { layout, lines } = await drawMenu(false, true);
+  const line = lines[layout.muteRow] ?? "";
+  console.log(`mute row under a global mute: "${line.trim()}"`);
+  if (!/all muted/.test(line)) fail(`a global mute is not disclosed on the row: "${line.trim()}"`);
+  if (!line.includes("mute voice")) fail(`the row stopped being the session's own mute: "${line.trim()}"`);
+}
 
 // Opening the info must cost exactly the one row it draws — anything else means the layout
 // and the overlay disagree about what unfolding the "?" does. Now that the "?" is last it

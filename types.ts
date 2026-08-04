@@ -74,10 +74,17 @@ export interface ContextMenuState {
   // instead of quietly flipping back.
   bookmarkIdx: number;
   bookmarkMsg: string;
-  // The claude-voice GLOBAL mute — the same flag the caption's button, the phone and
-  // `voice off --all` flip, re-read from the flag file every time the menu opens. The
-  // row reports failure in place (muteMsg), same contract as the bookmark row.
+  // Whether THIS TAB'S session is muted — the same per-session flag the caption's own mute
+  // button writes, re-read from disk every time the menu opens. It is a member of the voice
+  // segment and shares its scope; it used to flip the ONE global flag, and ticking it went
+  // silent everywhere. The row reports failure in place (muteMsg), same contract as the
+  // bookmark row.
   voiceMuted: boolean;
+  // Whether every session is muted (`voice off --all`, the phone's "Mute all"). NOT what
+  // the row toggles — what it has to disclose: under a global mute this session is silent
+  // whatever its own flag says, and a box left unticked would be the only thing on screen
+  // claiming otherwise.
+  voiceMutedAll: boolean;
   muteRowOff: number;
   muteMsg: string;
 }

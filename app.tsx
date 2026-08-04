@@ -14,7 +14,7 @@ import { SESSION_MENU_INNER, formatStopwatch, computeMenuLayout, sessionRowAt, t
 import { useMarqueeTick } from "./marquee.js";
 import { ContextMenuOverlay } from "./ContextMenuOverlay.js";
 import { clipboardWrite, clipboardRead } from "./clipboard.js";
-import { isVoiceMuted, setVoiceMuted } from "./voice.js";
+import { isVoiceMuted, isVoiceMutedGlobally, setVoiceMuted } from "./voice.js";
 
 // The Claude Voice history window, narrowed to one session. A script rather than a URL we
 // open ourselves: it owns "raise the existing window instead of piling up duplicates", and
@@ -390,7 +390,7 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
         // top border drawn on the clicked row sat exactly over the clock it came from.
         const r = Math.max(0, Math.min(row + 1, d.rows - layout.height));
         const c = Math.max(0, Math.min(col, d.cols - menuW));
-        ctxMenuRef.current = { kind: 'automateLinuxTerminalMenu', row: r, col: c, hasSelection: false, hoverItem: -1, sessions: [...history], stopwatchDisplay: formatStopwatch(swMs), stopwatchAction: sw.running ? 'stop' : 'start', stopwatchRowOff: layout.stopwatchRow, topic: topicRef.current, editingTopic: false, editBuffer: '', topicRowOff: layout.topicRow, sessionsRowOff: layout.sessionsRow, helpRowOff: layout.helpRow, infoOpen: false, showTopicBar: showTopicBarRef.current, copiedSessionIdx: -1, currentSessionId: voiceSessionId, captionsRowOff: layout.captionsRow, replayRowOff: layout.replayRow, captionsMsg: '', replayMsg: '', bookmarkIdx: -1, bookmarkMsg: '', voiceMuted: isVoiceMuted(), muteRowOff: layout.muteRow, muteMsg: '' };
+        ctxMenuRef.current = { kind: 'automateLinuxTerminalMenu', row: r, col: c, hasSelection: false, hoverItem: -1, sessions: [...history], stopwatchDisplay: formatStopwatch(swMs), stopwatchAction: sw.running ? 'stop' : 'start', stopwatchRowOff: layout.stopwatchRow, topic: topicRef.current, editingTopic: false, editBuffer: '', topicRowOff: layout.topicRow, sessionsRowOff: layout.sessionsRow, helpRowOff: layout.helpRow, infoOpen: false, showTopicBar: showTopicBarRef.current, copiedSessionIdx: -1, currentSessionId: voiceSessionId, captionsRowOff: layout.captionsRow, replayRowOff: layout.replayRow, captionsMsg: '', replayMsg: '', bookmarkIdx: -1, bookmarkMsg: '', voiceMuted: voiceSessionId ? isVoiceMuted(voiceSessionId) : false, voiceMutedAll: isVoiceMutedGlobally(), muteRowOff: layout.muteRow, muteMsg: '' };
         if (sw.running) {
           if (swTimerRef.current) clearInterval(swTimerRef.current);
           swTimerRef.current = setInterval(() => {
@@ -411,7 +411,7 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
           const s = normalizeSelection(selection.current!);
           return !(s.startRow === s.endRow && s.startCol === s.endCol);
         })();
-        ctxMenuRef.current = { kind: 'clipboard', row: r, col: c, hasSelection: hasSel, hoverItem: -1, sessions: [], stopwatchDisplay: null, stopwatchAction: null, stopwatchRowOff: 0, topic: '', editingTopic: false, editBuffer: '', topicRowOff: 0, sessionsRowOff: -1, helpRowOff: -1, infoOpen: false, showTopicBar: false, copiedSessionIdx: -1, currentSessionId: null, captionsRowOff: -1, replayRowOff: -1, captionsMsg: '', replayMsg: '', bookmarkIdx: -1, bookmarkMsg: '', voiceMuted: false, muteRowOff: -1, muteMsg: '' };
+        ctxMenuRef.current = { kind: 'clipboard', row: r, col: c, hasSelection: hasSel, hoverItem: -1, sessions: [], stopwatchDisplay: null, stopwatchAction: null, stopwatchRowOff: 0, topic: '', editingTopic: false, editBuffer: '', topicRowOff: 0, sessionsRowOff: -1, helpRowOff: -1, infoOpen: false, showTopicBar: false, copiedSessionIdx: -1, currentSessionId: null, captionsRowOff: -1, replayRowOff: -1, captionsMsg: '', replayMsg: '', bookmarkIdx: -1, bookmarkMsg: '', voiceMuted: false, voiceMutedAll: false, muteRowOff: -1, muteMsg: '' };
       }
       setCtxMenu({ ...ctxMenuRef.current });
       process.stdout.write('\x1b[?1003h');
@@ -455,7 +455,7 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
                 // 22/23/24 = the voice segment: mute, captions, replay. All three act on
                 // one session (m.currentSessionId), so they are single items like the
                 // topic -- not a band indexed by which block was clicked.
-                else if (rowOff === m.muteRowOff) itemIdx = 22;
+                else if (m.muteRowOff >= 0 && rowOff === m.muteRowOff) itemIdx = 22;
                 else if (m.captionsRowOff >= 0 && rowOff === m.captionsRowOff) itemIdx = 23;
                 else if (m.replayRowOff >= 0 && rowOff === m.replayRowOff) itemIdx = 24;
                 else if (rowOff === m.stopwatchRowOff) itemIdx = 10;
@@ -680,10 +680,24 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
                   pos += sgrMatch[0].length; continue;
                 }
                 if (m.kind === 'automateLinuxTerminalMenu' && onItem && itemIdx === 22) {
-                  // The claude-voice global mute. Tick first, write through the `voice`
-                  // CLI (the one place that also cuts the line mid-sentence), and on a
-                  // refusal put the tick back and say why on the row -- the bookmark's
-                  // contract, because here too a silent no-op reads as a misclick.
+                  // Mute THIS TAB'S session -- m.currentSessionId, the same session the two
+                  // rows under this one act on. Never the global flag: this row is one of
+                  // three that say "this tab", and the one that reached `--all` silenced
+                  // the dashboard, the phone and every other terminal from a menu that
+                  // named none of them.
+                  //
+                  // Tick first, write through the `voice` CLI (the one place that also cuts
+                  // the line already mid-sentence), and on a refusal put the tick back and
+                  // say why on the row -- the bookmark's contract, because here too a
+                  // silent no-op reads as a misclick.
+                  const sessionId = m.currentSessionId;
+                  if (!sessionId) {
+                    // The row is only drawn for a tab that has hosted a session, so this is
+                    // unreachable rather than a state worth a message -- but a mute with no
+                    // session must never widen into a global one to have something to do.
+                    closeMenu();
+                    pos += sgrMatch[0].length; continue;
+                  }
                   const next = !m.voiceMuted;
                   const noteMute = (muted: boolean, msg: string) => {
                     if (!ctxMenuRef.current || ctxMenuRef.current.kind !== 'automateLinuxTerminalMenu') return;
@@ -696,7 +710,7 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
                     }, 4000);
                   };
                   noteMute(next, '');
-                  setVoiceMuted(next).catch((err: Error) => {
+                  setVoiceMuted(next, sessionId).catch((err: Error) => {
                     noteMute(!next, `▸ ${err.message.length > 23 ? err.message.slice(0, 22) + '…' : err.message}`);
                   });
                   pos += sgrMatch[0].length; continue;

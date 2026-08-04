@@ -138,18 +138,23 @@ export function formatStopwatch(ms: number): string {
  *  the segment gives you the whole of it (silence it / read it / hear it again) without
  *  the eye having to collect three rows from three places.
  *
- *  They act on THIS TAB'S session (`currentSessionId`), which is why they can be one row
- *  each instead of one per session block: a tab hosts one live claude, and the captions
- *  you want are its. They are drawn only when this tab has hosted a session at all —
- *  rows that narrow a caption window to nothing are not worth their space. */
+ *  All three act on THIS TAB'S session (`currentSessionId`), which is why they can be one
+ *  row each instead of one per session block: a tab hosts one live claude, and the captions
+ *  you want are its. They are drawn only when this tab has hosted a session at all — rows
+ *  that narrow a caption window to nothing are not worth their space, and a mute with no
+ *  session to name has nothing it could silence but everyone else's.
+ *
+ *  The mute is IN the segment for that last reason. It used to sit above it, drawn always,
+ *  because it flipped the global flag and needed no session — which is exactly how it came
+ *  to silence every terminal on the machine from a row that reads like a tab's own. */
 export function computeMenuLayout(sessions: SessionHistoryEntry[], hasStopwatch: boolean, infoOpen: boolean) {
   let row = 0;
   row++;                         // top border
   const topicRow = row; row++;   // topic + its pin box (one row, split by column)
   row++;                         // the rule under the topic field
-  const muteRow = row; row++;    // mute voice (claude-voice global mute)
-  let captionsRow = -1, replayRow = -1;
+  let muteRow = -1, captionsRow = -1, replayRow = -1;
   if (sessions.length > 0) {
+    muteRow = row; row++;        // silence this tab's session
     captionsRow = row; row++;    // this tab's captions
     replayRow = row; row++;      // ...and the last of them, again
   }

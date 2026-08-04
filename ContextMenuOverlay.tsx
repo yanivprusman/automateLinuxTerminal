@@ -89,22 +89,8 @@ export function ContextMenuOverlay({ menu }: { menu: ContextMenuState }) {
             sessions and the app; above it there is one thing, and it now ends somewhere
             visible instead of running into the next checkbox. */}
         <Text backgroundColor="#2d2d2d" color="#888888">{`├${sessionMenuBorder}┤`}</Text>
-        {/* The claude-voice global mute — the same flag as the caption button and the
-            phone, so this box shows whatever surface last flipped it. Red when ticked:
-            a silenced voice should be visible at a glance, not discovered by waiting
-            for a sentence that never comes. */}
-        <Text>
-          <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
-          <Text
-            backgroundColor={menu.hoverItem === 22 ? "#3465a4" : "#2d2d2d"}
-            color={menu.muteMsg ? "#cc0000" : menu.voiceMuted ? "#cc0000" : "#888888"}
-          >
-            {sessionMenuPad(menu.muteMsg ? ` ${menu.muteMsg}` : menu.voiceMuted ? " ☑ mute voice" : " ☐ mute voice")}
-          </Text>
-          <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
-        </Text>
-        {/* The other two thirds of the voice segment: everything this tab's session has
-            said aloud (the Claude Voice history window, narrowed to it), and the last of
+        {/* The voice segment: silence this tab's session, read everything it has said
+            aloud (the Claude Voice history window, narrowed to it), and hear the last of
             it again. One row each, not one per session block — a tab hosts one live
             claude, and its voice is the voice this menu is about.
 
@@ -112,6 +98,28 @@ export function ContextMenuOverlay({ menu }: { menu: ContextMenuState }) {
             line arriving on its own, and refusing it silently would read as a dead row. */}
         {menu.sessions.length > 0 && (
           <>
+            {/* The mute is THIS SESSION'S — the same per-session flag the caption's own
+                button writes, so the two agree by construction. Red when ticked: a
+                silenced voice should be visible at a glance, not discovered by waiting
+                for a sentence that never comes.
+
+                A global mute ("Mute all", from the phone) is disclosed on the row rather
+                than folded into the box. Ticking the box for someone else's setting would
+                make the click that follows a no-op, and leaving the row silent about it
+                makes a working voice look broken — so the box keeps saying what THIS
+                session's flag is, and the suffix says why you still hear nothing. */}
+            <Text>
+              <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
+              <Text
+                backgroundColor={menu.hoverItem === 22 ? "#3465a4" : "#2d2d2d"}
+                color={menu.muteMsg || menu.voiceMuted || menu.voiceMutedAll ? "#cc0000" : "#888888"}
+              >
+                {sessionMenuPad(menu.muteMsg
+                  ? ` ${menu.muteMsg}`
+                  : `${menu.voiceMuted ? " ☑" : " ☐"} mute voice${menu.voiceMutedAll ? " · all muted" : ""}`)}
+              </Text>
+              <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
+            </Text>
             <Text>
               <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
               <Text
