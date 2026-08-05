@@ -2,7 +2,7 @@ import React from "react";
 import { Box, Text } from "ink";
 import type { ContextMenuState, SessionHistoryEntry } from "./types.js";
 import { APP_VERSION } from "./session.js";
-import { SESSION_MENU_INNER, sessionMenuPad, sessionMenuBorder, formatElapsed, TOPIC_VIEW_WIDTH, TOPIC_PIN_CELLS, SESSION_ID_LABEL, SESSION_CWD_LABEL, SESSION_COPY_SHORT_LABEL, sessionResumeHead, marqueeWindow, editWindow, exitLabel } from "./menu.js";
+import { SESSION_MENU_INNER, sessionMenuPad, sessionMenuBorder, formatElapsed, TOPIC_VIEW_WIDTH, TOPIC_PIN_CELLS, SESSION_ID_LABEL, SESSION_CWD_LABEL, SESSION_COPY_SHORT_LABEL, sessionResumeHead, marqueeWindow, editWindow, captionsLabel, replayLabel, exitLabel } from "./menu.js";
 import { useMarqueeTick } from "./marquee.js";
 
 /** The topic field: the pin box and the topic itself, on ONE row, closed off by a rule.
@@ -166,7 +166,12 @@ export function ContextMenuOverlay({ menu }: { menu: ContextMenuState }) {
             claude, and its voice is the voice this menu is about.
 
             Replay plays even when the box above is ticked: an explicit click is not a
-            line arriving on its own, and refusing it silently would read as a dead row. */}
+            line arriving on its own, and refusing it silently would read as a dead row.
+
+            The two share the segment's blue because they are one subject; they do NOT
+            share a mark. ▤ is a pane of lines to read, ↻ is hearing the last one again,
+            and `▸` — which both used to wear — is reserved for the messages they report
+            in place. See `menu.ts` for the whole rule. */}
         {menu.sessions.length > 0 && (
           <>
             {/* The mute is THIS SESSION'S — the same per-session flag the caption's own
@@ -197,7 +202,7 @@ export function ContextMenuOverlay({ menu }: { menu: ContextMenuState }) {
                 backgroundColor={menu.hoverItem === 23 ? "#3465a4" : "#2d2d2d"}
                 color={menu.captionsMsg ? "#34e2e2" : "#729fcf"}
               >
-                {sessionMenuPad(menu.captionsMsg ? ` ${menu.captionsMsg}` : " ▸ captions")}
+                {sessionMenuPad(menu.captionsMsg ? ` ${menu.captionsMsg}` : captionsLabel())}
               </Text>
               <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
             </Text>
@@ -207,7 +212,7 @@ export function ContextMenuOverlay({ menu }: { menu: ContextMenuState }) {
                 backgroundColor={menu.hoverItem === 24 ? "#3465a4" : "#2d2d2d"}
                 color={menu.replayMsg ? "#34e2e2" : "#729fcf"}
               >
-                {sessionMenuPad(menu.replayMsg ? ` ${menu.replayMsg}` : " ▸ replay last caption")}
+                {sessionMenuPad(menu.replayMsg ? ` ${menu.replayMsg}` : replayLabel())}
               </Text>
               <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
             </Text>
@@ -272,13 +277,20 @@ export function ContextMenuOverlay({ menu }: { menu: ContextMenuState }) {
 
             It says which of the two things it will do (there is only a claude to exit when
             one is running here), and while it runs it says which step it is on — this can
-            take seconds, and a row that goes quiet reads as a click that missed. */}
+            take seconds, and a row that goes quiet reads as a click that missed.
+
+            It is also the only WARM row in the menu, and wears the only ✕. A rule above it
+            was never enough on its own: it sat in the same blue and under the same `▸` as
+            the two voice rows a few lines up, so the row that ends the tab read as a third
+            harmless thing to try. Amber rather than red — red on this row means the exit
+            failed, and a row resting in its failure colour cannot report one. `menu.ts`
+            owns the marks and says why no two rows may share one. */}
         <Text backgroundColor="#2d2d2d" color="#888888">{`├${sessionMenuBorder}┤`}</Text>
         <Text>
           <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
           <Text
             backgroundColor={menu.hoverItem === 40 ? "#3465a4" : "#2d2d2d"}
-            color={menu.exitFailed ? "#cc0000" : menu.exitMsg ? "#34e2e2" : "#729fcf"}
+            color={menu.exitFailed ? "#cc0000" : menu.exitMsg ? "#34e2e2" : "#f57900"}
           >
             {sessionMenuPad(menu.exitMsg ? ` ${menu.exitMsg}` : exitLabel(menu.sessions.some(s => s.alive)))}
           </Text>

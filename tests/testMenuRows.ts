@@ -14,8 +14,9 @@
 import React from "react";
 import { render, Box } from "ink";
 import { PassThrough } from "stream";
+import stringWidth from "string-width";
 import { ContextMenuOverlay } from "../ContextMenuOverlay.js";
-import { computeMenuLayout, sessionRowAt, topicRowItem, TOPIC_PIN_CELLS, SESSION_MENU_INNER, SESSION_ID_LABEL, SESSION_CWD_LABEL, SESSION_RESUME_CELLS, SESSION_RESUME_LABEL, SESSION_COPY_SHORT_LABEL, sessionResumeHead, EXIT_LABEL_WITH_CLAUDE, EXIT_LABEL_BARE, exitLabel } from "../menu.js";
+import { computeMenuLayout, sessionRowAt, topicRowItem, TOPIC_PIN_CELLS, SESSION_MENU_INNER, SESSION_ID_LABEL, SESSION_CWD_LABEL, SESSION_RESUME_CELLS, SESSION_RESUME_LABEL, SESSION_COPY_SHORT_LABEL, sessionResumeHead, CAPTIONS_LABEL, REPLAY_LABEL, captionsLabel, replayLabel, EXIT_LABEL_WITH_CLAUDE, EXIT_LABEL_BARE, exitLabel } from "../menu.js";
 import type { ContextMenuState, SessionHistoryEntry } from "../types.js";
 
 // Mixed on purpose: a ticked and an unticked bookmark draw different text, and both have
@@ -81,8 +82,8 @@ async function check(infoOpen: boolean) {
 
   lines.forEach((line, rowOff) => {
     const hit = at(rowOff);
-    const isReplayLine = line.includes("replay last caption");
-    const isCaptionsLine = !isReplayLine && line.includes("▸ captions");
+    const isReplayLine = line.includes(REPLAY_LABEL);
+    const isCaptionsLine = !isReplayLine && line.includes(captionsLabel());
     // The topic's pin wears the same checkbox, so match the word, not the box.
     const isBookmarkLine = /\bbookmark(ed)?\b/.test(line);
     const shortIdOn = sessions.findIndex(s => line.includes(s.sessionId.slice(0, 8)));
@@ -111,8 +112,8 @@ async function check(infoOpen: boolean) {
   // that order, with a rule under them and none of them belonging to a session block.
   // They were a pair inside every block before; grouping them is the whole point of this
   // shape, and "one captions row per session" reappearing is what would undo it.
-  const captionsRows = lines.map((l, i) => [l, i] as const).filter(([l]) => l.includes("▸ captions")).map(([, i]) => i);
-  const replayRows = lines.map((l, i) => [l, i] as const).filter(([l]) => l.includes("replay last caption")).map(([, i]) => i);
+  const captionsRows = lines.map((l, i) => [l, i] as const).filter(([l]) => l.includes(captionsLabel())).map(([, i]) => i);
+  const replayRows = lines.map((l, i) => [l, i] as const).filter(([l]) => l.includes(replayLabel())).map(([, i]) => i);
   console.log(`voice segment — mute: ${layout.muteRow}, captions: ${captionsRows.join(",")}, replay: ${replayRows.join(",")}`);
   if (captionsRows.length !== 1) fail(`expected exactly one captions row, drew ${captionsRows.length}`);
   if (replayRows.length !== 1) fail(`expected exactly one replay row, drew ${replayRows.length}`);
@@ -351,6 +352,34 @@ for (const k of ["topicRow", "muteRow", "sessionsRow", "stopwatchRow", "exitRow"
   const none = computeMenuLayout([], true, false);
   if (none.exitRow < 0) fail("a tab with no sessions cannot be closed from its own menu");
   if (!(none.exitRow < none.helpRow)) fail(`with no sessions the exit row ${none.exitRow} is not above the "?" at ${none.helpRow}`);
+}
+
+// NO TWO ACTION ROWS WEAR THE SAME MARK.
+//
+// captions, replay and exit were once three identical-looking rows — same `▸`, same blue —
+// and the user could not tell them apart, which matters most for the one of the three that
+// ends the tab. `▸` is the app's MESSAGE marker (`▸ exiting…`, `▸ opening…`), so a resting
+// label may not wear it at all: each row's mark now says what the row does.
+//
+// Every mark must also be ONE cell wide. The rows are padded by counting characters
+// (sessionMenuPad slices to 35), so a two-cell glyph reads as 35 in the source and draws 36
+// on screen — the right border walks off the menu on that row alone.
+{
+  const marks = { captions: captionsLabel(), replay: replayLabel(), exit: exitLabel(true), exitBare: exitLabel(false) };
+  const markOf = (label: string) => label.trim()[0];
+  console.log(`\nrow marks — ${Object.entries(marks).map(([k, v]) => `${k}: ${markOf(v)}`).join(", ")}`);
+  for (const [a, b] of [["captions", "replay"], ["captions", "exit"], ["replay", "exit"]] as const) {
+    if (markOf(marks[a]) === markOf(marks[b]))
+      fail(`"${a}" and "${b}" wear the same mark "${markOf(marks[a])}" — the rows read as the same kind of thing`);
+  }
+  for (const [name, label] of Object.entries(marks)) {
+    if (markOf(label) === "▸")
+      fail(`"${name}" wears "▸", which is the marker every transient message in the app already uses`);
+    if (stringWidth(markOf(label)) !== 1)
+      fail(`"${name}"'s mark "${markOf(label)}" is ${stringWidth(markOf(label))} cells wide — it will push the row's right border out`);
+    if (stringWidth(label) > SESSION_MENU_INNER)
+      fail(`"${name}" draws ${stringWidth(label)} cells into a ${SESSION_MENU_INNER}-cell row`);
+  }
 }
 
 console.log(failures ? `\nFAILED (${failures})` : "\nPASS");

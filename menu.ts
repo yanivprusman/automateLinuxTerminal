@@ -64,17 +64,43 @@ export const SESSION_COPY_SHORT_LABEL = "copy";
 export const sessionResumeHead = (dot: string) => ` ${dot} ${SESSION_RESUME_LABEL}`;
 export const SESSION_RESUME_CELLS = sessionResumeHead("○").length;
 
+/** THE MARK EACH ACTION ROW WEARS. No two of them may share one.
+ *
+ *  All three used to wear `▸`, in one blue, and they read as three of the same thing --
+ *  which the exit row very much is not. Two separate reasons they had to be told apart:
+ *
+ *  `▸` is this app's MESSAGE marker, not a verb: every transient line the menu reports in
+ *  place (`▸ exiting…`, `▸ opening…`, `▸ shell is busy here`) wears it, and so does every
+ *  `note()` outside the menu. A resting label wearing the same mark says "something is
+ *  happening here" while nothing is. So `▸` is now reserved for the messages, and each row
+ *  gets a mark for what it DOES: a pane of lines to read, a turn back to hear the last one
+ *  again, and a cross for the one row that ends the tab.
+ *
+ *  Colour then carries the grouping the marks no longer can: the two voice rows keep the
+ *  segment's blue (they are one subject, and reading down them is the point -- see
+ *  computeMenuLayout), and the exit row is the only warm thing in the menu. It is not red:
+ *  red on this row already means the exit FAILED, and a row that rests in its own failure
+ *  colour cannot report one.
+ *
+ *  Every mark here is one cell wide (`string-width` 1). The rows are padded by counting
+ *  characters, so a two-cell glyph -- `☰` is one -- would shift a row's right edge off the
+ *  border while looking perfectly fine in the source.
+ *
+ *  Exported so the tests can find each row by the words the menu actually draws. */
+export const CAPTIONS_LABEL = "captions";
+export const REPLAY_LABEL = "replay last caption";
+export const captionsLabel = () => ` ▤ ${CAPTIONS_LABEL}`;
+export const replayLabel = () => ` ↻ ${REPLAY_LABEL}`;
+
 /** What the exit row says, and therefore what it does. Two labels because it is two
  *  different amounts of work: with a claude running here it is Ctrl+D, Ctrl+D, `exit` --
  *  the three presses this row exists to stop anyone having to remember -- and with none it
  *  is just the last one. A row that promised to exit claude when there is no claude would
- *  be describing a step it is about to skip.
- *
- *  Exported so the tests can find the row by the words the menu actually draws. */
+ *  be describing a step it is about to skip. */
 export const EXIT_LABEL_WITH_CLAUDE = "exit claude and this terminal";
 export const EXIT_LABEL_BARE = "exit this terminal";
 export const exitLabel = (liveClaude: boolean) =>
-  ` ▸ ${liveClaude ? EXIT_LABEL_WITH_CLAUDE : EXIT_LABEL_BARE}`;
+  ` ✕ ${liveClaude ? EXIT_LABEL_WITH_CLAUDE : EXIT_LABEL_BARE}`;
 
 /** Longest topic the menu accepts. The row no longer has to HOLD the topic — one that
  *  overflows scrolls — so this is only a sanity bound on a string that also becomes a

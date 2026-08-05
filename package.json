@@ -19,6 +19,7 @@
   "devDependencies": {
     "@types/node": "^25.6.2",
     "@types/react": "^19.2.14",
+    "string-width": "^8.2.1",
     "tsx": "^4.21.0",
     "typescript": "^6.0.3"
   }
