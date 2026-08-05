@@ -2,7 +2,7 @@ import React from "react";
 import { Box, Text } from "ink";
 import type { ContextMenuState, SessionHistoryEntry } from "./types.js";
 import { APP_VERSION } from "./session.js";
-import { SESSION_MENU_INNER, sessionMenuPad, sessionMenuBorder, formatElapsed, TOPIC_VIEW_WIDTH, TOPIC_PIN_CELLS, SESSION_ID_LABEL, SESSION_CWD_LABEL, SESSION_COPY_SHORT_LABEL, sessionResumeHead, marqueeWindow, editWindow } from "./menu.js";
+import { SESSION_MENU_INNER, sessionMenuPad, sessionMenuBorder, formatElapsed, TOPIC_VIEW_WIDTH, TOPIC_PIN_CELLS, SESSION_ID_LABEL, SESSION_CWD_LABEL, SESSION_COPY_SHORT_LABEL, sessionResumeHead, marqueeWindow, editWindow, exitLabel } from "./menu.js";
 import { useMarqueeTick } from "./marquee.js";
 
 /** The topic field: the pin box and the topic itself, on ONE row, closed off by a rule.
@@ -264,6 +264,26 @@ export function ContextMenuOverlay({ menu }: { menu: ContextMenuState }) {
             </Text>
           </>
         )}
+        {/* Ending the tab: the three presses (Ctrl+D, Ctrl+D, then out of the shell) as one
+            click. Its own segment, directly above the "?" — the far end of a menu that
+            opens downwards from the clock, so it is the hardest row here to hit by
+            accident, but never the LAST row, because the "?" unfolds downwards and a row
+            that ends the session must not slide under the pointer.
+
+            It says which of the two things it will do (there is only a claude to exit when
+            one is running here), and while it runs it says which step it is on — this can
+            take seconds, and a row that goes quiet reads as a click that missed. */}
+        <Text backgroundColor="#2d2d2d" color="#888888">{`├${sessionMenuBorder}┤`}</Text>
+        <Text>
+          <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
+          <Text
+            backgroundColor={menu.hoverItem === 40 ? "#3465a4" : "#2d2d2d"}
+            color={menu.exitFailed ? "#cc0000" : menu.exitMsg ? "#34e2e2" : "#729fcf"}
+          >
+            {sessionMenuPad(menu.exitMsg ? ` ${menu.exitMsg}` : exitLabel(menu.sessions.some(s => s.alive)))}
+          </Text>
+          <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
+        </Text>
         {/* What this menu is, and which version of it, used to hold the top row of every
             open. It is reference, not something anyone came here to click, so it sits
             behind this "?" and unfolds in place — and it sits LAST, so the row people do

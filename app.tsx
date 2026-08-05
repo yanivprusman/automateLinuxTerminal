@@ -15,6 +15,7 @@ import { useMarqueeTick } from "./marquee.js";
 import { ContextMenuOverlay } from "./ContextMenuOverlay.js";
 import { clipboardWrite, clipboardRead } from "./clipboard.js";
 import { resumeKeystrokes, shellState } from "./resume.js";
+import { runExitSequence } from "./exit.js";
 import { isVoiceMuted, isVoiceMutedGlobally, setVoiceMuted } from "./voice.js";
 
 // The Claude Voice history window, narrowed to one session. A script rather than a URL we
@@ -401,7 +402,7 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
         // top border drawn on the clicked row sat exactly over the clock it came from.
         const r = Math.max(0, Math.min(row + 1, d.rows - layout.height));
         const c = Math.max(0, Math.min(col, d.cols - menuW));
-        ctxMenuRef.current = { kind: 'automateLinuxTerminalMenu', row: r, col: c, hasSelection: false, hoverItem: -1, sessions: [...history], stopwatchDisplay: formatStopwatch(swMs), stopwatchAction: sw.running ? 'stop' : 'start', stopwatchRowOff: layout.stopwatchRow, topic: topicRef.current, editingTopic: false, editBuffer: '', topicRowOff: layout.topicRow, sessionsRowOff: layout.sessionsRow, helpRowOff: layout.helpRow, infoOpen: false, showTopicBar: showTopicBarRef.current, copiedSessionIdx: -1, currentSessionId: voiceSessionId, captionsRowOff: layout.captionsRow, replayRowOff: layout.replayRow, captionsMsg: '', replayMsg: '', bookmarkIdx: -1, bookmarkMsg: '', resumeIdx: -1, resumeMsg: '', voiceMuted: voiceSessionId ? isVoiceMuted(voiceSessionId) : false, voiceMutedAll: isVoiceMutedGlobally(), muteRowOff: layout.muteRow, muteMsg: '' };
+        ctxMenuRef.current = { kind: 'automateLinuxTerminalMenu', row: r, col: c, hasSelection: false, hoverItem: -1, sessions: [...history], stopwatchDisplay: formatStopwatch(swMs), stopwatchAction: sw.running ? 'stop' : 'start', stopwatchRowOff: layout.stopwatchRow, topic: topicRef.current, editingTopic: false, editBuffer: '', topicRowOff: layout.topicRow, sessionsRowOff: layout.sessionsRow, helpRowOff: layout.helpRow, infoOpen: false, showTopicBar: showTopicBarRef.current, copiedSessionIdx: -1, currentSessionId: voiceSessionId, captionsRowOff: layout.captionsRow, replayRowOff: layout.replayRow, captionsMsg: '', replayMsg: '', bookmarkIdx: -1, bookmarkMsg: '', resumeIdx: -1, resumeMsg: '', voiceMuted: voiceSessionId ? isVoiceMuted(voiceSessionId) : false, voiceMutedAll: isVoiceMutedGlobally(), muteRowOff: layout.muteRow, muteMsg: '', exitRowOff: layout.exitRow, exitMsg: '', exitFailed: false };
         if (sw.running) {
           if (swTimerRef.current) clearInterval(swTimerRef.current);
           swTimerRef.current = setInterval(() => {
@@ -422,7 +423,7 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
           const s = normalizeSelection(selection.current!);
           return !(s.startRow === s.endRow && s.startCol === s.endCol);
         })();
-        ctxMenuRef.current = { kind: 'clipboard', row: r, col: c, hasSelection: hasSel, hoverItem: -1, sessions: [], stopwatchDisplay: null, stopwatchAction: null, stopwatchRowOff: 0, topic: '', editingTopic: false, editBuffer: '', topicRowOff: 0, sessionsRowOff: -1, helpRowOff: -1, infoOpen: false, showTopicBar: false, copiedSessionIdx: -1, currentSessionId: null, captionsRowOff: -1, replayRowOff: -1, captionsMsg: '', replayMsg: '', bookmarkIdx: -1, bookmarkMsg: '', resumeIdx: -1, resumeMsg: '', voiceMuted: false, voiceMutedAll: false, muteRowOff: -1, muteMsg: '' };
+        ctxMenuRef.current = { kind: 'clipboard', row: r, col: c, hasSelection: hasSel, hoverItem: -1, sessions: [], stopwatchDisplay: null, stopwatchAction: null, stopwatchRowOff: 0, topic: '', editingTopic: false, editBuffer: '', topicRowOff: 0, sessionsRowOff: -1, helpRowOff: -1, infoOpen: false, showTopicBar: false, copiedSessionIdx: -1, currentSessionId: null, captionsRowOff: -1, replayRowOff: -1, captionsMsg: '', replayMsg: '', bookmarkIdx: -1, bookmarkMsg: '', resumeIdx: -1, resumeMsg: '', voiceMuted: false, voiceMutedAll: false, muteRowOff: -1, muteMsg: '', exitRowOff: -1, exitMsg: '', exitFailed: false };
       }
       setCtxMenu({ ...ctxMenuRef.current });
       process.stdout.write('\x1b[?1003h');
@@ -469,6 +470,8 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
                 else if (m.muteRowOff >= 0 && rowOff === m.muteRowOff) itemIdx = 22;
                 else if (m.captionsRowOff >= 0 && rowOff === m.captionsRowOff) itemIdx = 23;
                 else if (m.replayRowOff >= 0 && rowOff === m.replayRowOff) itemIdx = 24;
+                // 40 = end the claude running here, then the terminal itself.
+                else if (m.exitRowOff >= 0 && rowOff === m.exitRowOff) itemIdx = 40;
                 else if (rowOff === m.stopwatchRowOff) itemIdx = 10;
                 else {
                   // 100 + i = the session itself (copy its id), 300 + i = its bookmark,
@@ -528,6 +531,46 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
                   });
                   child.unref();
                   note('▸ replaying…', 0);
+                  pos += sgrMatch[0].length; continue;
+                }
+                // End the claude running here, then the terminal — the three presses
+                // (Ctrl+D, Ctrl+D, then out of the shell) as one click. What each press is
+                // and when it may be sent lives in exit.ts; this is the wiring.
+                if (m.kind === 'automateLinuxTerminalMenu' && onItem && itemIdx === 40) {
+                  const noteExit = (msg: string, failed: boolean) => {
+                    if (!ctxMenuRef.current || ctxMenuRef.current.kind !== 'automateLinuxTerminalMenu') return;
+                    const u: ContextMenuState = { ...ctxMenuRef.current, exitMsg: msg, exitFailed: failed };
+                    ctxMenuRef.current = u;
+                    setCtxMenu(u);
+                    // A refusal clears itself; the menu stays open, because the state it
+                    // refused over (a build running here, a claude on its transcript view)
+                    // is the user's to clear and then click again.
+                    if (failed) setTimeout(() => {
+                      const cur = ctxMenuRef.current;
+                      if (cur?.kind === 'automateLinuxTerminalMenu' && cur.exitMsg === msg) noteExit('', false);
+                    }, 4000);
+                  };
+                  // Everything typing does, because this IS typing: come back from a
+                  // scrolled-back screen and drop a selection whose highlight would
+                  // otherwise sit over whatever replaces it.
+                  if (term.buffer.active.viewportY !== term.buffer.active.baseY) term.scrollToBottom();
+                  selection.current = null;
+                  contentDirty.current = true;
+                  needsRefresh.current = true;
+                  noteExit('▸ exiting…', false);
+                  runExitSequence({
+                    write: keys => shell.write(keys),
+                    shellState: () => shellState(shell.pid),
+                    hasClaude: () => !!detectClaudeSession(shell.pid),
+                    shellAlive: () => isPidAlive(shell.pid),
+                    wait: ms => new Promise(r => setTimeout(r, ms)),
+                    note: msg => noteExit(msg, false),
+                  }).then(res => {
+                    // Success is this process being torn down by the shell's own exit
+                    // (shell.onExit), so there is nothing to report on the way out — only
+                    // the ways it declined reach a row that is still on screen.
+                    if (!res.ok) noteExit(`▸ ${res.reason}`, true);
+                  });
                   pos += sgrMatch[0].length; continue;
                 }
                 // Resume a session that has ENDED, in the tab it ended in. Checked before
@@ -727,6 +770,7 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
                     muteRowOff: layout.muteRow,
                     sessionsRowOff: layout.sessionsRow,
                     stopwatchRowOff: layout.stopwatchRow,
+                    exitRowOff: layout.exitRow,
                     helpRowOff: layout.helpRow,
                   };
                   ctxMenuRef.current = upd;

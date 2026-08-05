@@ -92,6 +92,14 @@ export interface ContextMenuState {
   voiceMutedAll: boolean;
   muteRowOff: number;
   muteMsg: string;
+  // The exit row: Ctrl+D, Ctrl+D, `exit`, in one click. It sits above the "?" and below
+  // everything else -- see computeMenuLayout for why it is never the LAST row.
+  exitRowOff: number;
+  // What it is reporting: a phase while it runs ("exiting claude…"), or the reason it
+  // stopped. Both live here because the row draws one line; exitFailed says which, since a
+  // refusal has to be legible as a refusal and progress must not be red.
+  exitMsg: string;
+  exitFailed: boolean;
 }
 
 export interface ClaudeSessionInfo {

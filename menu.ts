@@ -64,6 +64,18 @@ export const SESSION_COPY_SHORT_LABEL = "copy";
 export const sessionResumeHead = (dot: string) => ` ${dot} ${SESSION_RESUME_LABEL}`;
 export const SESSION_RESUME_CELLS = sessionResumeHead("○").length;
 
+/** What the exit row says, and therefore what it does. Two labels because it is two
+ *  different amounts of work: with a claude running here it is Ctrl+D, Ctrl+D, `exit` --
+ *  the three presses this row exists to stop anyone having to remember -- and with none it
+ *  is just the last one. A row that promised to exit claude when there is no claude would
+ *  be describing a step it is about to skip.
+ *
+ *  Exported so the tests can find the row by the words the menu actually draws. */
+export const EXIT_LABEL_WITH_CLAUDE = "exit claude and this terminal";
+export const EXIT_LABEL_BARE = "exit this terminal";
+export const exitLabel = (liveClaude: boolean) =>
+  ` ▸ ${liveClaude ? EXIT_LABEL_WITH_CLAUDE : EXIT_LABEL_BARE}`;
+
 /** Longest topic the menu accepts. The row no longer has to HOLD the topic — one that
  *  overflows scrolls — so this is only a sanity bound on a string that also becomes a
  *  window title and a spoken label, not a layout constraint. */
@@ -167,7 +179,15 @@ export function formatStopwatch(ms: number): string {
  *
  *  The mute is IN the segment for that last reason. It used to sit above it, drawn always,
  *  because it flipped the global flag and needed no session — which is exactly how it came
- *  to silence every terminal on the machine from a row that reads like a tab's own. */
+ *  to silence every terminal on the machine from a row that reads like a tab's own.
+ *
+ *  The exit row is a segment of its own, and it sits directly ABOVE the "?" rather than
+ *  under it — the last row anyone reaches for, but never the last row. Two reasons, both
+ *  about the pointer: this menu opens downwards from the clock, so the far end of it is
+ *  the furthest thing from where the click that opened it landed, which is where an action
+ *  that ends the session belongs; and the "?" unfolds its info line DOWNWARDS, so anything
+ *  below the "?" would slide out from under the pointer the moment someone opened it. A
+ *  row that ends the tab is the last row in the menu that may move. */
 export function computeMenuLayout(sessions: SessionHistoryEntry[], hasStopwatch: boolean, infoOpen: boolean) {
   let row = 0;
   row++;                         // top border
@@ -194,11 +214,13 @@ export function computeMenuLayout(sessions: SessionHistoryEntry[], hasStopwatch:
     row++;                       // stopwatch separator
     stopwatchRow = row; row++;   // stopwatch
   }
+  row++;                         // exit separator
+  const exitRow = row; row++;    // end the claude here, then this terminal
   row++;                         // help separator
   const helpRow = row; row++;    // the "?"
   if (infoOpen) row++;           // the info line it opens
   row++;                         // bottom border
-  return { helpRow, topicRow, muteRow, captionsRow, replayRow, sessionsRow, stopwatchRow, height: row };
+  return { helpRow, exitRow, topicRow, muteRow, captionsRow, replayRow, sessionsRow, stopwatchRow, height: row };
 }
 
 export type SessionRowAction = 'copy' | 'bookmark' | 'resume';

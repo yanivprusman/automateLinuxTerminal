@@ -15,7 +15,7 @@ import React from "react";
 import { render, Box } from "ink";
 import { PassThrough } from "stream";
 import { ContextMenuOverlay } from "../ContextMenuOverlay.js";
-import { computeMenuLayout, sessionRowAt, topicRowItem, TOPIC_PIN_CELLS, SESSION_MENU_INNER, SESSION_ID_LABEL, SESSION_CWD_LABEL, SESSION_RESUME_CELLS, SESSION_RESUME_LABEL, SESSION_COPY_SHORT_LABEL, sessionResumeHead } from "../menu.js";
+import { computeMenuLayout, sessionRowAt, topicRowItem, TOPIC_PIN_CELLS, SESSION_MENU_INNER, SESSION_ID_LABEL, SESSION_CWD_LABEL, SESSION_RESUME_CELLS, SESSION_RESUME_LABEL, SESSION_COPY_SHORT_LABEL, sessionResumeHead, EXIT_LABEL_WITH_CLAUDE, EXIT_LABEL_BARE, exitLabel } from "../menu.js";
 import type { ContextMenuState, SessionHistoryEntry } from "../types.js";
 
 // Mixed on purpose: a ticked and an unticked bookmark draw different text, and both have
@@ -32,17 +32,20 @@ const sessions: SessionHistoryEntry[] = [
 let failures = 0;
 const fail = (msg: string) => { failures++; console.log("  FAIL " + msg); };
 
-async function drawMenu(infoOpen: boolean, voiceMutedAll = false) {
-  const layout = computeMenuLayout(sessions, true, infoOpen);
+// `sess` defaults to the fixture above; the exit row's label depends on whether any session
+// in the menu is still running, so one block below draws the same menu with none.
+async function drawMenu(infoOpen: boolean, voiceMutedAll = false, sess: SessionHistoryEntry[] = sessions) {
+  const layout = computeMenuLayout(sess, true, infoOpen);
   const menu: ContextMenuState = {
     kind: "automateLinuxTerminalMenu", row: 0, col: 0, hasSelection: false, hoverItem: -1,
-    sessions, stopwatchDisplay: "00:00", stopwatchAction: "start",
+    sessions: sess, stopwatchDisplay: "00:00", stopwatchAction: "start",
     stopwatchRowOff: layout.stopwatchRow, topic: "voice", editingTopic: false, editBuffer: "",
     topicRowOff: layout.topicRow, sessionsRowOff: layout.sessionsRow, helpRowOff: layout.helpRow, infoOpen,
     showTopicBar: true, copiedSessionIdx: -1,
     currentSessionId: sessions[0].sessionId, captionsRowOff: layout.captionsRow, replayRowOff: layout.replayRow,
     captionsMsg: "", replayMsg: "", bookmarkIdx: -1, bookmarkMsg: "", resumeIdx: -1, resumeMsg: "",
     voiceMuted: true, voiceMutedAll, muteRowOff: layout.muteRow, muteMsg: "",
+    exitRowOff: layout.exitRow, exitMsg: "", exitFailed: false,
   };
 
   const out = new PassThrough() as unknown as NodeJS.WriteStream;
@@ -253,6 +256,27 @@ async function check(infoOpen: boolean) {
   if (!(layout.topicRow < layout.sessionsRow)) fail(`topic row ${layout.topicRow} is not above the session list at ${layout.sessionsRow}`);
   if (at(layout.sessionsRow)?.idx !== 0) fail(`sessionsRow ${layout.sessionsRow} is not the first session's line`);
 
+  // THE EXIT ROW — the one row here that ends things. It types into the shell (Ctrl+D,
+  // Ctrl+D, `exit`), so a click that lands on it by mistake, or a click meant for it that
+  // lands elsewhere, is the worst kind of drift this file exists to catch.
+  const exitLines = lines.map((l, i) => [l, i] as const).filter(([l]) => /\bexit\b/.test(l)).map(([, i]) => i);
+  console.log(`exit row: ${layout.exitRow} (drawn at ${exitLines.join(",")})`);
+  if (exitLines.length !== 1) fail(`expected exactly one exit row, drew ${exitLines.length}`);
+  else if (exitLines[0] !== layout.exitRow) fail(`exit drawn at ${exitLines[0]} but the layout says ${layout.exitRow}`);
+  const exitLine = lines[layout.exitRow] ?? "";
+  // Every session in the fixture list… some are alive, so the row promises both halves.
+  if (!exitLine.includes(EXIT_LABEL_WITH_CLAUDE))
+    fail(`exitRow does not say it ends the claude running here: "${exitLine.trim()}"`);
+  if (at(layout.exitRow)) fail("the exit row also maps to a session — a click on it would copy or bookmark");
+  // Its own segment: a rule above and the "?"'s rule below, so it is never read as the last
+  // item of the timer's block or the first of the help's.
+  if (!(lines[layout.exitRow - 1] ?? "").startsWith("├")) fail(`no rule above the exit row: "${(lines[layout.exitRow - 1] ?? "").trim()}"`);
+  if (!(lines[layout.exitRow + 1] ?? "").startsWith("├")) fail(`no rule below the exit row: "${(lines[layout.exitRow + 1] ?? "").trim()}"`);
+  // Below everything the menu is opened FOR, and above the "?" — never last. The "?"
+  // unfolds downwards, and a row that ends the session may not slide under the pointer.
+  if (!(layout.exitRow > layout.stopwatchRow)) fail(`the exit row ${layout.exitRow} is above the timer at ${layout.stopwatchRow}`);
+  if (!(layout.exitRow < layout.helpRow)) fail(`the exit row ${layout.exitRow} is not above the "?" at ${layout.helpRow}`);
+
   // The "?" holds the name and version: shown only when it is open, and never where the
   // old title row was (a permanent row is the thing this replaced).
   const helpLine = lines[layout.helpRow] ?? "";
@@ -305,8 +329,28 @@ await check(true);
 const shut = computeMenuLayout(sessions, true, false);
 const open = computeMenuLayout(sessions, true, true);
 if (open.height !== shut.height + 1) fail(`opening the info changed the height by ${open.height - shut.height}, expected 1`);
-for (const k of ["topicRow", "muteRow", "sessionsRow", "stopwatchRow", "helpRow"] as const) {
+for (const k of ["topicRow", "muteRow", "sessionsRow", "stopwatchRow", "exitRow", "helpRow"] as const) {
   if (open[k] !== shut[k]) fail(`opening the info moved ${k} by ${open[k] - shut[k]}, expected 0`);
+}
+
+// THE EXIT ROW SAYS WHICH OF THE TWO THINGS IT WILL DO.
+//
+// With a claude running here it is three presses; with none it is one, and a row promising
+// to exit a claude that is not there describes a step it is about to skip. It is also drawn
+// for a tab that never hosted a session at all — unlike the voice segment, there is always
+// a terminal to close.
+{
+  const dead = sessions.map(s => ({ ...s, alive: false }));
+  const { layout, lines } = await drawMenu(false, false, dead);
+  const line = lines[layout.exitRow] ?? "";
+  console.log(`exit row with nothing running: "${line.trim()}"`);
+  if (!line.includes(EXIT_LABEL_BARE)) fail(`with no live session the row does not say "${EXIT_LABEL_BARE}": "${line.trim()}"`);
+  if (line.includes(EXIT_LABEL_WITH_CLAUDE)) fail(`the row offers to exit a claude that is not running: "${line.trim()}"`);
+  if (exitLabel(true) === exitLabel(false)) fail("both states of the exit row draw the same words");
+
+  const none = computeMenuLayout([], true, false);
+  if (none.exitRow < 0) fail("a tab with no sessions cannot be closed from its own menu");
+  if (!(none.exitRow < none.helpRow)) fail(`with no sessions the exit row ${none.exitRow} is not above the "?" at ${none.helpRow}`);
 }
 
 console.log(failures ? `\nFAILED (${failures})` : "\nPASS");
