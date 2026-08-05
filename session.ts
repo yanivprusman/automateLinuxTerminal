@@ -24,7 +24,30 @@ export const LAUNCH_DIR = process.env.CLAUDE_LAUNCH_DIR || process.cwd();
 export const SCRIPT_LOG_FILE = process.env.CLAUDE_SCRIPT_LOG_FILE || '';
 export const DASHBOARD_PORT = process.env.CLAUDE_DASHBOARD_PORT || '3007';
 
-export const METADATA_FILE = SESSION_ID ? `/tmp/automateLinuxTerminal-${SESSION_ID}.json` : '';
+// The dashboard's ONLY way to discover a session it did not launch is this file
+// (`lib/terminal-metadata.ts::listLiveTerminalMetadata` scans for it, and the
+// route adopts every live host it finds). Keying it on the launcher env made it
+// exist only for launches the dashboard itself started: a tab opened by hand and
+// then given a `cl` was running a real session that no dashboard, phone or
+// session picker could see at all — it published a topic and a window claim and
+// nothing that says "a session lives here". So it is keyed on the session the
+// tab is ACTUALLY showing, the same authority the window claim already uses, and
+// re-keyed when a `/resume` changes it.
+const metadataFileFor = (sessionId: string) => `/tmp/automateLinuxTerminal-${sessionId}.json`;
+
+// The id the metadata file and the dashboard registration currently stand under
+// ('' = nothing published yet). Both move together, so one comparison decides
+// whether anything has to be rewritten.
+let publishedUnder = '';
+
+// A re-key must not restate the host's age as "now" — the card sorts and shows
+// "running for", and a resume would keep resetting it to zero.
+const HOST_STARTED_AT = new Date().toISOString();
+
+/** The metadata file this host currently owns, or '' before it publishes one. */
+export function currentMetadataFile(): string {
+  return publishedUnder ? metadataFileFor(publishedUnder) : '';
+}
 
 // The claude ACTUALLY running in this tab's shell, refreshed by the title poll
 // (which already walks the process tree every 5s, so this costs nothing extra).
@@ -52,19 +75,80 @@ export const APP_VERSION = (() => {
   } catch { return ''; }
 })();
 
-export function writeMetadata(shellPid: number): void {
-  if (!METADATA_FILE) return;
+function parentPidOf(pid: number): number {
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, 'utf-8');
+    return parseInt(stat.split(') ')[1]?.split(' ')[1] || '0');
+  } catch { return 0; }
+}
+
+/**
+ * The `script -qf <log>` wrapper a claude is running under, found in its own
+ * ancestry. CLAUDE_SCRIPT_LOG_FILE is preset only for launches this app made;
+ * a hand-opened tab's `cl` names the log after ITS launch key and tells the host
+ * nothing — and without that path the card has no terminal preview and the
+ * dashboard's register endpoint refuses the session outright (it requires a
+ * scriptFile). The wrapper is claude's direct parent today; the walk covers a
+ * shell being spliced between them.
+ */
+export function scriptLogOf(claudePid: number): string {
+  let current = claudePid;
+  for (let i = 0; i < 5 && current > 1; i++) {
+    let argv: string[] = [];
+    try {
+      argv = readFileSync(`/proc/${current}/cmdline`, 'utf-8').split('\0').filter(Boolean);
+    } catch { return ''; }
+    if (/(^|\/)script$/.test(argv[0] || '')) {
+      const f = argv.indexOf('-qf');
+      if (f >= 0 && argv[f + 1]) return argv[f + 1];
+    }
+    current = parentPidOf(current);
+  }
+  return '';
+}
+
+// The tab's last known topic, so a re-key carries it into the new file instead
+// of dropping the name off the session for the rest of its life.
+let lastTopic = '';
+
+/**
+ * Publish (or re-key) this host's metadata file and its dashboard registration
+ * under the session the tab is showing now. A no-op unless that id changed, so
+ * the 5s title poll can call it unconditionally.
+ *
+ * `claudePid` is the live claude the poll already identified — passed in rather
+ * than re-derived, since a second way to answer "which claude is this tab's" is
+ * the root of the focus-session bug family (`.claude/CLAUDE.md`).
+ */
+export function publishSessionMetadata(shellPid: number, claudePid?: number): void {
+  const sid = currentSessionId();
+  if (!sid || sid === publishedUnder) return;
+  const scriptLog = SCRIPT_LOG_FILE || (claudePid ? scriptLogOf(claudePid) : '');
   const meta = {
-    claudeSessionId: SESSION_ID,
+    claudeSessionId: sid,
     tmuxSession: IN_TMUX ? TMUX_SESSION : '',
-    appName: APP_NAME,
+    // An unmanaged tab is told no app name, and an empty one leaves the card
+    // labelled with nothing. The directory the tab was opened in is the same
+    // thing the managed launches name their app after (/opt/dev/<app>).
+    appName: APP_NAME || LAUNCH_DIR.replace(/\/+$/, '').split('/').pop() || '',
     launchDir: LAUNCH_DIR,
     pid: process.pid,
     shellPid,
-    startedAt: new Date().toISOString(),
-    scriptLogFile: SCRIPT_LOG_FILE,
+    startedAt: HOST_STARTED_AT,
+    scriptLogFile: scriptLog,
+    ...(lastTopic ? { topic: lastTopic } : {}),
   };
-  writeFileSync(METADATA_FILE, JSON.stringify(meta, null, 2));
+  try {
+    writeFileSync(metadataFileFor(sid), JSON.stringify(meta, null, 2));
+  } catch { return; }
+  // One file per host: the id we stood under names a session this tab no longer
+  // shows, and leaving it would keep a dead session listed as live (the reader
+  // only checks that OUR pid is alive, and it is).
+  if (publishedUnder && publishedUnder !== sid) {
+    try { unlinkSync(metadataFileFor(publishedUnder)); } catch {}
+  }
+  publishedUnder = sid;
+  registerWithDashboard(shellPid, sid, scriptLog);
 }
 
 // ── Which host window is this? ────────────────────────────────────────────────
@@ -187,7 +271,10 @@ export function writePidTopic(topic: string): void {
 }
 
 export function cleanupMetadata(): void {
-  try { if (METADATA_FILE) unlinkSync(METADATA_FILE); } catch {}
+  const file = currentMetadataFile();
+  try { if (file) unlinkSync(file); } catch {}
+  // publishedUnder deliberately survives: notifySessionEnded runs straight after
+  // this on the way out and tells the dashboard which registration just ended.
   try { unlinkSync(PID_TOPIC_FILE); } catch {}
   removeWindowClaim();
 }
@@ -196,12 +283,17 @@ export function cleanupMetadata(): void {
 // stack) can label and per-session-mute this session by its human name rather than a UUID.
 // Merges into the existing metadata file rather than rewriting the whole thing.
 export function writeTopic(topic: string): void {
-  if (!METADATA_FILE) return;
+  // Remembered even when there is no file to write it into yet — an idle tab
+  // can be named before its claude starts, and publishSessionMetadata carries
+  // the name into the file it eventually writes.
+  lastTopic = topic;
+  const file = currentMetadataFile();
+  if (!file) return;
   try {
     let meta: Record<string, unknown> = {};
-    try { meta = JSON.parse(readFileSync(METADATA_FILE, 'utf-8')); } catch {}
+    try { meta = JSON.parse(readFileSync(file, 'utf-8')); } catch {}
     meta.topic = topic;
-    writeFileSync(METADATA_FILE, JSON.stringify(meta, null, 2));
+    writeFileSync(file, JSON.stringify(meta, null, 2));
   } catch {}
 }
 
@@ -304,14 +396,23 @@ export async function setBookmarked(sessionId: string, bookmarked: boolean): Pro
   if (!res.ok) throw new Error(`dashboard said ${res.status}`);
 }
 
-export function registerWithDashboard(shellPid: number): void {
-  if (!SESSION_ID) return;
+/**
+ * Put the session in the dashboard's durable registry. Keyed on the id passed in
+ * — the live session, not the launcher env — so a hand-opened tab registers too.
+ *
+ * The registry is not the only way the session shows up (a live host's metadata
+ * file is adopted as a first-class session on its own), which is why a tab whose
+ * claude has no `script` wrapper simply doesn't register: the endpoint requires a
+ * scriptFile, and there is nothing to invent for it.
+ */
+export function registerWithDashboard(shellPid: number, sessionId: string, scriptFile: string): void {
+  if (!sessionId || !scriptFile) return;
   const body = JSON.stringify({
-    sessionId: TMUX_SESSION || `alt-${SESSION_ID.slice(0, 8)}`,
-    claudeSessionId: SESSION_ID,
-    appName: APP_NAME,
+    sessionId: TMUX_SESSION || `alt-${sessionId.slice(0, 8)}`,
+    claudeSessionId: sessionId,
+    appName: APP_NAME || LAUNCH_DIR.replace(/\/+$/, '').split('/').pop() || '',
     workDir: LAUNCH_DIR,
-    scriptFile: SCRIPT_LOG_FILE,
+    scriptFile,
     termTitle: TMUX_SESSION,
     launchMethod: IN_TMUX ? 'tmux' : 'terminal',
     source: 'terminal',
@@ -332,8 +433,10 @@ export function registerWithDashboard(shellPid: number): void {
 }
 
 export function notifySessionEnded(): void {
-  if (!SESSION_ID) return;
-  const sid = TMUX_SESSION || `alt-${SESSION_ID.slice(0, 8)}`;
+  // The key we registered UNDER, not the launcher's — they are the same for a
+  // managed launch and only the former exists for every other tab.
+  if (!publishedUnder) return;
+  const sid = TMUX_SESSION || `alt-${publishedUnder.slice(0, 8)}`;
   fetch(`http://localhost:${DASHBOARD_PORT}/api/claude-sessions/${sid}/ended`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

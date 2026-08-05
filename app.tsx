@@ -8,7 +8,7 @@ import xterm from "@xterm/headless";
 const { Terminal: XTerminal } = xterm;
 
 import type { Span, Line, Selection, ContextMenuState, SessionHistoryEntry } from "./types.js";
-import { SESSION_ID, LAUNCH_DIR, SCRIPT_LOG_FILE, writeMetadata, writeTopic, writePidTopic, propagateTopicToDashboard, fetchStoredTopic, readStoredTopic, cleanupMetadata, registerWithDashboard, notifySessionEnded, detectClaudeSession, noteLiveSessionId, currentSessionId, isPidAlive, claimHostWindow, publishWindowClaim, readBookmarkedIds, setBookmarked } from "./session.js";
+import { SESSION_ID, LAUNCH_DIR, SCRIPT_LOG_FILE, publishSessionMetadata, writeTopic, writePidTopic, propagateTopicToDashboard, fetchStoredTopic, readStoredTopic, cleanupMetadata, notifySessionEnded, detectClaudeSession, noteLiveSessionId, currentSessionId, isPidAlive, claimHostWindow, publishWindowClaim, readBookmarkedIds, setBookmarked } from "./session.js";
 import { EMPTY_SPAN, spansEqual, normalizeSelection, readBufferRow, readBuffer } from "./buffer.js";
 import { SESSION_MENU_INNER, formatStopwatch, computeMenuLayout, sessionRowAt, topicRowItem, TOPIC_MAX_CHARS, topicBarWidth, marqueeWindow } from "./menu.js";
 import { useMarqueeTick } from "./marquee.js";
@@ -135,9 +135,15 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
     shellRef.current = shell;
 
     let scriptLogStream: WriteStream | null = null;
+    // NOT gated on SESSION_ID. publishSessionMetadata stands the metadata file and
+    // the dashboard registration under the session this tab is SHOWING, which at
+    // startup is the launcher's id for a managed launch and nothing at all for a
+    // tab opened by hand — that one publishes a few seconds later, when the title
+    // poll finds the claude running in it. Gating on the env is what made every
+    // hand-opened session invisible to the dashboard, the phone and the picker.
+    publishSessionMetadata(shell.pid);
+    writePidTopic(topicRef.current);
     if (SESSION_ID) {
-      writeMetadata(shell.pid); writePidTopic(topicRef.current);
-      registerWithDashboard(shell.pid);
       // Restore the topic set before a resume/reboot — it lives durably in the
       // dashboard keyed by the claude session id, which survives resumes. Only
       // fill an empty topic; a topic typed in THIS tab always wins.
@@ -212,6 +218,10 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
       // tab is showing now, so focus keeps working under the id every other
       // surface has switched to. No-op unless the id actually changed.
       publishWindowClaim();
+      // Same re-keying, for the file that says "a session lives in this tab" and
+      // for its dashboard entry: a tab opened by hand has no session until a
+      // claude starts in it, and a /resume replaces the one it had.
+      publishSessionMetadata(shell.pid, info?.pid);
       claudeTitle = info && info.sessionId !== 'unknown' ? `claude-${info.sessionId}`
                   : SESSION_ID ? `claude-${SESSION_ID}` : "";
       // Runs every 5s, so a topic set or cleared anywhere — this tab's menu, the

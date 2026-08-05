@@ -11,7 +11,16 @@
 //
 //   npx tsx tests/testTopicSync.ts
 import { readFileSync } from "fs";
-import { SESSION_ID, DASHBOARD_PORT, noteLiveSessionId, currentSessionId, readStoredTopic } from "../session.js";
+// session.ts reads the launcher env once, at import — so run from inside a
+// managed session (a Claude tab, the only place anyone runs this) it inherited
+// THAT session's id and the precondition below failed on a healthy tree. The
+// strip has to happen before the module is evaluated, which a dynamic import is
+// the only way to order.
+for (const k of ["CLAUDE_SESSION_ID", "CLAUDE_TMUX_SESSION", "CLAUDE_LAUNCH_DIR",
+                 "CLAUDE_APP_NAME", "CLAUDE_SCRIPT_LOG_FILE", "TMUX"]) {
+  delete process.env[k];
+}
+const { SESSION_ID, DASHBOARD_PORT, noteLiveSessionId, currentSessionId, readStoredTopic } = await import("../session.js");
 
 const META = "/opt/automateLinux/data/dashboard/claude-session-meta.json";
 let failures = 0;
