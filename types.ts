@@ -74,6 +74,11 @@ export interface ContextMenuState {
   // instead of quietly flipping back.
   bookmarkIdx: number;
   bookmarkMsg: string;
+  // And for the resume half of a dead session's head row: it types into this tab's shell,
+  // which can refuse (the shell is running something, the session has no id yet), and the
+  // row says which — a click that silently types nothing is indistinguishable from a miss.
+  resumeIdx: number;
+  resumeMsg: string;
   // Whether THIS TAB'S session is muted — the same per-session flag the caption's own mute
   // button writes, re-read from disk every time the menu opens. It is a member of the voice
   // segment and shares its scope; it used to flip the ONE global flag, and ticking it went

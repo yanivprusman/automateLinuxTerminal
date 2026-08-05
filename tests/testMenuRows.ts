@@ -15,15 +15,18 @@ import React from "react";
 import { render, Box } from "ink";
 import { PassThrough } from "stream";
 import { ContextMenuOverlay } from "../ContextMenuOverlay.js";
-import { computeMenuLayout, sessionRowAt, topicRowItem, TOPIC_PIN_CELLS, SESSION_MENU_INNER, SESSION_ID_LABEL, SESSION_CWD_LABEL } from "../menu.js";
+import { computeMenuLayout, sessionRowAt, topicRowItem, TOPIC_PIN_CELLS, SESSION_MENU_INNER, SESSION_ID_LABEL, SESSION_CWD_LABEL, SESSION_RESUME_CELLS, SESSION_RESUME_LABEL, SESSION_COPY_SHORT_LABEL, sessionResumeHead } from "../menu.js";
 import type { ContextMenuState, SessionHistoryEntry } from "../types.js";
 
 // Mixed on purpose: a ticked and an unticked bookmark draw different text, and both have
-// to map back to the row that drew them.
+// to map back to the row that drew them. Dead sessions with and without a cwd for the same
+// reason -- their head row is the one row in the menu split by column, and the rows under
+// it are not, so the block has to be walked with both shapes present.
 const sessions: SessionHistoryEntry[] = [
   { sessionId: "aaaaaaaa-1111-2222-3333-444444444444", cwd: "/opt/dev/claude-voice", pid: 1, startMs: Date.now() - 60_000, alive: true, bookmarked: true },
   { sessionId: "bbbbbbbb-5555-6666-7777-888888888888", cwd: null, pid: 2, startMs: Date.now() - 3_600_000, alive: false, bookmarked: false },
   { sessionId: "cccccccc-9999-0000-1111-222222222222", cwd: "/opt/automateLinux", pid: 3, startMs: Date.now(), alive: true, bookmarked: false },
+  { sessionId: "dddddddd-3333-4444-5555-666666666666", cwd: "/opt/dev/monster", pid: 4, startMs: Date.now() - 45_000_000, alive: false, bookmarked: true },
 ];
 
 let failures = 0;
@@ -38,7 +41,7 @@ async function drawMenu(infoOpen: boolean, voiceMutedAll = false) {
     topicRowOff: layout.topicRow, sessionsRowOff: layout.sessionsRow, helpRowOff: layout.helpRow, infoOpen,
     showTopicBar: true, copiedSessionIdx: -1,
     currentSessionId: sessions[0].sessionId, captionsRowOff: layout.captionsRow, replayRowOff: layout.replayRow,
-    captionsMsg: "", replayMsg: "", bookmarkIdx: -1, bookmarkMsg: "",
+    captionsMsg: "", replayMsg: "", bookmarkIdx: -1, bookmarkMsg: "", resumeIdx: -1, resumeMsg: "",
     voiceMuted: true, voiceMutedAll, muteRowOff: layout.muteRow, muteMsg: "",
   };
 
@@ -66,7 +69,10 @@ async function drawMenu(infoOpen: boolean, voiceMutedAll = false) {
 
 async function check(infoOpen: boolean) {
   const { layout, lines } = await drawMenu(infoOpen);
-  const at = (rowOff: number) => sessionRowAt(rowOff, sessions, layout.sessionsRow);
+  // Only ONE row in the menu is split by column (a dead session's head row, whose leading
+  // cells resume it), so everything below asks about a row at its far end -- where every
+  // row means what it has always meant. The split itself is pinned in its own block.
+  const at = (rowOff: number, colOff = SESSION_MENU_INNER) => sessionRowAt(rowOff, sessions, layout.sessionsRow, colOff);
   console.log(`\ninfo ${infoOpen ? "open" : "closed"} — drawn rows: ${lines.length}, computeMenuLayout height: ${layout.height}`);
   if (lines.length !== layout.height) fail(`height mismatch — the menu draws ${lines.length} rows but the layout reserves ${layout.height}`);
 
@@ -117,17 +123,68 @@ async function check(infoOpen: boolean) {
   if (!(lines[layout.replayRow + 1] ?? "").startsWith("├"))
     fail(`the voice segment is not closed off by a rule: row ${layout.replayRow + 1} is "${(lines[layout.replayRow + 1] ?? "").trim()}"`);
 
-  // The head row has to hold ALL of it: the label, the whole 8-character id, and the
+  // The head row has to hold ALL of it: the label(s), the whole 8-character id, and the
   // elapsed time. This is what the menu's width is set from -- narrow it and the id (or
   // the timer) is silently sliced off the end of a row that still looks fine.
-  const headRows = lines.map((l, i) => [l, i] as const).filter(([l]) => l.includes(SESSION_ID_LABEL)).map(([, i]) => i);
-  if (headRows.length !== sessions.length) fail(`${sessions.length} sessions but ${headRows.length} head rows`);
+  const headRows = sessions.map(s => lines.findIndex(l => l.includes(s.sessionId.slice(0, 8))));
+  if (headRows.some(r => r < 0)) fail(`a session draws no head row: ${JSON.stringify(headRows)}`);
   sessions.forEach((s, i) => {
     const line = lines[headRows[i]] ?? "";
-    if (!line.includes(`${SESSION_ID_LABEL} ${s.sessionId.slice(0, 8)}`))
-      fail(`session ${i}'s head row does not draw "${SESSION_ID_LABEL} ${s.sessionId.slice(0, 8)}" uncut: "${line.trim()}"`);
-    if (!/\d+[smh]/.test(line.replace(s.sessionId.slice(0, 8), "")))
-      fail(`session ${i}'s head row lost its elapsed time to the label: "${line.trim()}"`);
+    const short = s.sessionId.slice(0, 8);
+    // A live session's row does one thing and says so. A dead one does two, and both are
+    // named: the dot's own word first, the copy it shares the row with after.
+    if (s.alive) {
+      if (!line.includes(`${SESSION_ID_LABEL} ${short}`))
+        fail(`live session ${i}'s head row does not draw "${SESSION_ID_LABEL} ${short}" uncut: "${line.trim()}"`);
+      if (line.includes(SESSION_RESUME_LABEL))
+        fail(`live session ${i}'s head row offers to resume a session that is still running: "${line.trim()}"`);
+    } else {
+      if (!line.includes(SESSION_RESUME_LABEL))
+        fail(`dead session ${i}'s head row does not say it can be resumed: "${line.trim()}"`);
+      if (!line.includes(`${SESSION_COPY_SHORT_LABEL} ${short}`))
+        fail(`dead session ${i}'s head row does not draw "${SESSION_COPY_SHORT_LABEL} ${short}" uncut: "${line.trim()}"`);
+    }
+    if (!/\d+[smh]/.test(line.replace(short, "")))
+      fail(`session ${i}'s head row lost its elapsed time to the label(s): "${line.trim()}"`);
+  });
+
+  // THE RESUME HALF — the one place in this menu where a session row's meaning depends on
+  // the pointer's COLUMN, and the only new way a click can be mis-routed.
+  //
+  // The target is the cells the words occupy, so what is drawn and what is claimed are
+  // pinned to each other: `sessionResumeHead` composes both. Drift here means either a
+  // click on "resume" copying an id, or -- far worse -- a click meaning "copy" typing a
+  // command into the shell.
+  sessions.forEach((s, i) => {
+    const rowOff = headRows[i];
+    const head = sessionResumeHead("○");
+    if (s.alive) {
+      // Nothing to bring back, so the row stays undivided: its first cell copies, as the
+      // whole row always has.
+      if (at(rowOff, 1)?.action !== "copy")
+        fail(`live session ${i}: a click on its dot maps to ${JSON.stringify(at(rowOff, 1))}, expected copy`);
+      return;
+    }
+    const drawn = (lines[rowOff] ?? "").replace(/^│/, "").slice(0, SESSION_RESUME_CELLS);
+    if (drawn !== head)
+      fail(`dead session ${i} draws "${drawn}" in the ${SESSION_RESUME_CELLS} cells claimed as the resume target, expected "${head}"`);
+    for (const col of [1, 2, SESSION_RESUME_CELLS]) {
+      const hit = at(rowOff, col);
+      if (hit?.action !== "resume" || hit.idx !== i)
+        fail(`dead session ${i}: column ${col} maps to ${JSON.stringify(hit)}, expected resume of ${i}`);
+    }
+    for (const col of [SESSION_RESUME_CELLS + 1, SESSION_MENU_INNER]) {
+      const hit = at(rowOff, col);
+      if (hit?.action !== "copy" || hit.idx !== i)
+        fail(`dead session ${i}: column ${col} maps to ${JSON.stringify(hit)}, expected copy of ${i}`);
+    }
+    // ...and only that row. The rows under it are undivided, so the same leading cells
+    // there must not resume anything -- a bookmark click that types into the shell instead
+    // is exactly the kind of off-by-one row this test exists for.
+    for (let r = rowOff + 1; r <= rowOff + (s.cwd ? 2 : 1); r++) {
+      if (at(r, 1)?.action === "resume")
+        fail(`row ${r} (under dead session ${i}'s head) resumes at column 1`);
+    }
   });
 
   // Every session that has one draws its cwd, labelled -- a bare path said nothing about

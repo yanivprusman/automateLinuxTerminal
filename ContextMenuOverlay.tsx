@@ -1,8 +1,8 @@
 import React from "react";
 import { Box, Text } from "ink";
-import type { ContextMenuState } from "./types.js";
+import type { ContextMenuState, SessionHistoryEntry } from "./types.js";
 import { APP_VERSION } from "./session.js";
-import { SESSION_MENU_INNER, sessionMenuPad, sessionMenuBorder, formatElapsed, TOPIC_VIEW_WIDTH, TOPIC_PIN_CELLS, SESSION_ID_LABEL, SESSION_CWD_LABEL, marqueeWindow, editWindow } from "./menu.js";
+import { SESSION_MENU_INNER, sessionMenuPad, sessionMenuBorder, formatElapsed, TOPIC_VIEW_WIDTH, TOPIC_PIN_CELLS, SESSION_ID_LABEL, SESSION_CWD_LABEL, SESSION_COPY_SHORT_LABEL, sessionResumeHead, marqueeWindow, editWindow } from "./menu.js";
 import { useMarqueeTick } from "./marquee.js";
 
 /** The topic field: the pin box and the topic itself, on ONE row, closed off by a rule.
@@ -72,6 +72,77 @@ function CwdRow({ cwd, bg }: { cwd: string; bg: string }) {
       <Text backgroundColor={bg} color="#c4a000">{sessionMenuPad(` ${marqueeWindow(text, width, tick)}`)}</Text>
       <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
     </Text>
+  );
+}
+
+/** A session's head row: what the session IS, and what the two things you can do to it are.
+ *
+ *  A LIVE session is one undivided row that copies its id, as it always was. A session that
+ *  has ENDED is two halves split by the pointer's column — ` ○ resume` brings it back in
+ *  this tab, `· copy 90cc2dc0` still copies the id — and they highlight separately, which
+ *  is the only thing on the row that teaches the split. The topic row does exactly this
+ *  with its pin box; `sessionRowAt` owns the column arithmetic for both halves so what is
+ *  drawn here and what a click means cannot drift (`tests/testMenuRows.ts` pins them).
+ *
+ *  The dot is the resume target rather than a new row because it is already the thing that
+ *  says the session is gone — and a block that grows a row per session would push the timer
+ *  and the "?" further down on every open. */
+function SessionHeadRow({ menu, entry, i }: { menu: ContextMenuState; entry: SessionHistoryEntry; i: number }) {
+  const isCopied = menu.copiedSessionIdx === i;
+  const dot = entry.alive ? '●' : '○';
+  const id = entry.sessionId.slice(0, 8);
+  const right = `${formatElapsed(entry.startMs)} `;
+  const isHovered = menu.hoverItem === 100 + i;
+  const rowBg = isCopied ? "#1a3a1a" : isHovered ? "#3465a4" : "#2d2d2d";
+  const color = isCopied ? '#34e2e2' : entry.alive ? '#8ae234' : '#888888';
+  const border = <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>;
+  const fill = (s: string, w: number) => (s + ' '.repeat(w)).slice(0, w);
+  // A refused resume reports in place, like the bookmark row two below: the state it
+  // refused over (a busy shell, a session with no id yet) is the user's to clear, and a row
+  // that just does nothing reads as a misclick.
+  if (menu.resumeIdx === i && menu.resumeMsg) {
+    return (
+      <Text>{border}
+        <Text backgroundColor={rowBg} color="#cc0000">{sessionMenuPad(` ${menu.resumeMsg}`)}</Text>
+        {border}</Text>
+    );
+  }
+  if (isCopied) {
+    return (
+      <Text>{border}
+        <Text backgroundColor={rowBg} color={color}>{fill(' copied!', SESSION_MENU_INNER)}</Text>
+        {border}</Text>
+    );
+  }
+  if (entry.alive) {
+    // The row says what clicking it DOES, not just which session it is: both this row and
+    // the cwd under it copy the id, and nothing said so.
+    const left = ` ${dot} ${SESSION_ID_LABEL} ${id}`;
+    const gap = SESSION_MENU_INNER - left.length - right.length;
+    return (
+      <Text>{border}
+        <Text backgroundColor={rowBg} color={color}>{fill(left + ' '.repeat(Math.max(1, gap)) + right, SESSION_MENU_INNER)}</Text>
+        {border}</Text>
+    );
+  }
+  const head = sessionResumeHead(dot);
+  const rest = ` · ${SESSION_COPY_SHORT_LABEL} ${id}`;
+  const gap = SESSION_MENU_INNER - head.length - rest.length - right.length;
+  return (
+    <Text>{border}
+      {/* The two halves highlight SEPARATELY, as the topic row's pin and field do: it is
+          the only thing on the row that shows a click here does not mean a click an inch
+          to the right. So this half never borrows the copy half's hover. */}
+      <Text
+        backgroundColor={menu.hoverItem === 400 + i ? "#3465a4" : "#2d2d2d"}
+        color="#729fcf"
+      >
+        {head}
+      </Text>
+      <Text backgroundColor={rowBg} color={color}>
+        {fill(rest + ' '.repeat(Math.max(1, gap)) + right, SESSION_MENU_INNER - head.length)}
+      </Text>
+      {border}</Text>
   );
 }
 
@@ -149,27 +220,11 @@ export function ContextMenuOverlay({ menu }: { menu: ContextMenuState }) {
             <Text backgroundColor="#2d2d2d" color="#888888">{`├${sessionMenuBorder}┤`}</Text>
             {menu.sessions.map((entry, i) => {
               const isCopied = menu.copiedSessionIdx === i;
-              const dot = entry.alive ? '●' : '○';
-              const id = entry.sessionId.slice(0, 8);
-              const elapsed = formatElapsed(entry.startMs);
-              // The row says what clicking it DOES, not just which session it is: both this
-              // row and the cwd under it copy the id, and nothing said so.
-              const left = ` ${dot} ${SESSION_ID_LABEL} ${id}`;
-              const right = `${elapsed} `;
-              const gap = SESSION_MENU_INNER - left.length - right.length;
-              const normalText = left + ' '.repeat(Math.max(1, gap)) + right;
-              const copiedLabel = ' copied!';
-              const copiedText = copiedLabel + ' '.repeat(Math.max(0, SESSION_MENU_INNER - copiedLabel.length));
-              const color = isCopied ? '#34e2e2' : entry.alive ? '#8ae234' : '#888888';
               const isHovered = menu.hoverItem === 100 + i;
               const rowBg = isCopied ? "#1a3a1a" : isHovered ? "#3465a4" : "#2d2d2d";
               return (
                 <React.Fragment key={entry.sessionId}>
-                  <Text>
-                    <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
-                    <Text backgroundColor={rowBg} color={color}>{(isCopied ? copiedText : (normalText + ' '.repeat(SESSION_MENU_INNER))).slice(0, SESSION_MENU_INNER)}</Text>
-                    <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
-                  </Text>
+                  <SessionHeadRow menu={menu} entry={entry} i={i} />
                   {entry.cwd && <CwdRow cwd={entry.cwd} bg={rowBg} />}
                   {/* Keep this session — the dashboard's own bookmark flag, so a session
                       ticked here is the one its "Bookmarked" filter lists. Drawn with the

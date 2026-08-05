@@ -43,6 +43,27 @@ export function topicRowItem(colOff: number, editing: boolean): 20 | 21 {
 export const SESSION_ID_LABEL = "copy session id";
 export const SESSION_CWD_LABEL = "launched from";
 
+/** What a DEAD session's head row says instead, and how much of it is the resume target.
+ *
+ *  The ●/○ was the one thing on the row that already said whether the session is still
+ *  running, so it is the thing that brings it back — but a bare glyph says nothing about
+ *  being clickable, and this menu's rule is that a row says what clicking it DOES. So the
+ *  dot wears the word: ` ○ resume · copy 90cc2dc0`, and the first `SESSION_RESUME_CELLS`
+ *  cells (the indent, the dot and the word) are the target, for the same reason the topic's
+ *  pin box claims three — a single character is too small a thing to ask a pointer to find.
+ *
+ *  The rest of the row still copies the id, as the whole row did before and as a live
+ *  session's row still does. `copy session id` does not fit next to `resume` inside 35
+ *  cells with the elapsed time on the right, and the id is what a copy copies, so the short
+ *  label carries it.
+ *
+ *  Derived, not written twice: the overlay draws `sessionResumeHead(dot)` and the hit-test
+ *  claims exactly its length, so the words and the target cannot drift apart. */
+export const SESSION_RESUME_LABEL = "resume";
+export const SESSION_COPY_SHORT_LABEL = "copy";
+export const sessionResumeHead = (dot: string) => ` ${dot} ${SESSION_RESUME_LABEL}`;
+export const SESSION_RESUME_CELLS = sessionResumeHead("○").length;
+
 /** Longest topic the menu accepts. The row no longer has to HOLD the topic — one that
  *  overflows scrolls — so this is only a sanity bound on a string that also becomes a
  *  window title and a spoken label, not a layout constraint. */
@@ -180,7 +201,7 @@ export function computeMenuLayout(sessions: SessionHistoryEntry[], hasStopwatch:
   return { helpRow, topicRow, muteRow, captionsRow, replayRow, sessionsRow, stopwatchRow, height: row };
 }
 
-export type SessionRowAction = 'copy' | 'bookmark';
+export type SessionRowAction = 'copy' | 'bookmark' | 'resume';
 
 /** Which session a menu row belongs to, and what clicking it does. Every session occupies
  *  two or three consecutive rows -- the id line, an optional cwd line and the bookmark
@@ -190,6 +211,12 @@ export type SessionRowAction = 'copy' | 'bookmark';
  *  passed in rather than counted from the top because what sits above the list now varies:
  *  the "?" opens an info line, and the topic and voice sections above shift everything.
  *
+ *  `colOff` (1-based from the menu's left border, as the mouse handler measures it) matters
+ *  on ONE row: a dead session's head row, whose leading cells resume it instead of copying
+ *  its id. A live session's row is undivided -- there is nothing to bring back -- so the
+ *  column is read only where the overlay actually draws two halves, and this function is
+ *  the single place that decides which rows those are.
+ *
  *  A new row goes on the END of the block -- any other placement shifts a row people
  *  already click by position. The captions and replay rows used to live here, one pair per
  *  block; they are one pair in the voice segment above now, so what is left in a block is
@@ -198,11 +225,15 @@ export function sessionRowAt(
   rowOff: number,
   sessions: SessionHistoryEntry[],
   startRow: number,
+  colOff: number,
 ): { idx: number; action: SessionRowAction } | null {
   if (sessions.length === 0 || startRow < 0) return null;
   let row = startRow;
   for (let i = 0; i < sessions.length; i++) {
-    if (rowOff === row) return { idx: i, action: 'copy' };
+    if (rowOff === row) {
+      const onResume = !sessions[i].alive && colOff <= SESSION_RESUME_CELLS;
+      return { idx: i, action: onResume ? 'resume' : 'copy' };
+    }
     row++;
     if (sessions[i].cwd) {
       if (rowOff === row) return { idx: i, action: 'copy' };

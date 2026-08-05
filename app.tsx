@@ -14,6 +14,7 @@ import { SESSION_MENU_INNER, formatStopwatch, computeMenuLayout, sessionRowAt, t
 import { useMarqueeTick } from "./marquee.js";
 import { ContextMenuOverlay } from "./ContextMenuOverlay.js";
 import { clipboardWrite, clipboardRead } from "./clipboard.js";
+import { resumeKeystrokes, shellState } from "./resume.js";
 import { isVoiceMuted, isVoiceMutedGlobally, setVoiceMuted } from "./voice.js";
 
 // The Claude Voice history window, narrowed to one session. A script rather than a URL we
@@ -390,7 +391,7 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
         // top border drawn on the clicked row sat exactly over the clock it came from.
         const r = Math.max(0, Math.min(row + 1, d.rows - layout.height));
         const c = Math.max(0, Math.min(col, d.cols - menuW));
-        ctxMenuRef.current = { kind: 'automateLinuxTerminalMenu', row: r, col: c, hasSelection: false, hoverItem: -1, sessions: [...history], stopwatchDisplay: formatStopwatch(swMs), stopwatchAction: sw.running ? 'stop' : 'start', stopwatchRowOff: layout.stopwatchRow, topic: topicRef.current, editingTopic: false, editBuffer: '', topicRowOff: layout.topicRow, sessionsRowOff: layout.sessionsRow, helpRowOff: layout.helpRow, infoOpen: false, showTopicBar: showTopicBarRef.current, copiedSessionIdx: -1, currentSessionId: voiceSessionId, captionsRowOff: layout.captionsRow, replayRowOff: layout.replayRow, captionsMsg: '', replayMsg: '', bookmarkIdx: -1, bookmarkMsg: '', voiceMuted: voiceSessionId ? isVoiceMuted(voiceSessionId) : false, voiceMutedAll: isVoiceMutedGlobally(), muteRowOff: layout.muteRow, muteMsg: '' };
+        ctxMenuRef.current = { kind: 'automateLinuxTerminalMenu', row: r, col: c, hasSelection: false, hoverItem: -1, sessions: [...history], stopwatchDisplay: formatStopwatch(swMs), stopwatchAction: sw.running ? 'stop' : 'start', stopwatchRowOff: layout.stopwatchRow, topic: topicRef.current, editingTopic: false, editBuffer: '', topicRowOff: layout.topicRow, sessionsRowOff: layout.sessionsRow, helpRowOff: layout.helpRow, infoOpen: false, showTopicBar: showTopicBarRef.current, copiedSessionIdx: -1, currentSessionId: voiceSessionId, captionsRowOff: layout.captionsRow, replayRowOff: layout.replayRow, captionsMsg: '', replayMsg: '', bookmarkIdx: -1, bookmarkMsg: '', resumeIdx: -1, resumeMsg: '', voiceMuted: voiceSessionId ? isVoiceMuted(voiceSessionId) : false, voiceMutedAll: isVoiceMutedGlobally(), muteRowOff: layout.muteRow, muteMsg: '' };
         if (sw.running) {
           if (swTimerRef.current) clearInterval(swTimerRef.current);
           swTimerRef.current = setInterval(() => {
@@ -411,7 +412,7 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
           const s = normalizeSelection(selection.current!);
           return !(s.startRow === s.endRow && s.startCol === s.endCol);
         })();
-        ctxMenuRef.current = { kind: 'clipboard', row: r, col: c, hasSelection: hasSel, hoverItem: -1, sessions: [], stopwatchDisplay: null, stopwatchAction: null, stopwatchRowOff: 0, topic: '', editingTopic: false, editBuffer: '', topicRowOff: 0, sessionsRowOff: -1, helpRowOff: -1, infoOpen: false, showTopicBar: false, copiedSessionIdx: -1, currentSessionId: null, captionsRowOff: -1, replayRowOff: -1, captionsMsg: '', replayMsg: '', bookmarkIdx: -1, bookmarkMsg: '', voiceMuted: false, voiceMutedAll: false, muteRowOff: -1, muteMsg: '' };
+        ctxMenuRef.current = { kind: 'clipboard', row: r, col: c, hasSelection: hasSel, hoverItem: -1, sessions: [], stopwatchDisplay: null, stopwatchAction: null, stopwatchRowOff: 0, topic: '', editingTopic: false, editBuffer: '', topicRowOff: 0, sessionsRowOff: -1, helpRowOff: -1, infoOpen: false, showTopicBar: false, copiedSessionIdx: -1, currentSessionId: null, captionsRowOff: -1, replayRowOff: -1, captionsMsg: '', replayMsg: '', bookmarkIdx: -1, bookmarkMsg: '', resumeIdx: -1, resumeMsg: '', voiceMuted: false, voiceMutedAll: false, muteRowOff: -1, muteMsg: '' };
       }
       setCtxMenu({ ...ctxMenuRef.current });
       process.stdout.write('\x1b[?1003h');
@@ -460,11 +461,12 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
                 else if (m.replayRowOff >= 0 && rowOff === m.replayRowOff) itemIdx = 24;
                 else if (rowOff === m.stopwatchRowOff) itemIdx = 10;
                 else {
-                  // 100 + i = the session itself (copy its id), 300 + i = its bookmark.
-                  // Tested against what the overlay draws in tests/testMenuRows.ts -- a
-                  // drift here silently mis-routes clicks.
-                  const hit = sessionRowAt(rowOff, m.sessions, m.sessionsRowOff);
-                  const base = hit ? { copy: 100, bookmark: 300 }[hit.action] : 0;
+                  // 100 + i = the session itself (copy its id), 300 + i = its bookmark,
+                  // 400 + i = resume it (the head cells of a DEAD session's row only, which
+                  // is why the column goes in). Tested against what the overlay draws in
+                  // tests/testMenuRows.ts -- a drift here silently mis-routes clicks.
+                  const hit = sessionRowAt(rowOff, m.sessions, m.sessionsRowOff, mCol - m.col);
+                  const base = hit ? { copy: 100, bookmark: 300, resume: 400 }[hit.action] : 0;
                   itemIdx = hit ? base + hit.idx : -1;
                 }
                 menuW = SESSION_MENU_INNER;
@@ -516,6 +518,56 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
                   });
                   child.unref();
                   note('▸ replaying…', 0);
+                  pos += sgrMatch[0].length; continue;
+                }
+                // Resume a session that has ENDED, in the tab it ended in. Checked before
+                // the bookmark band below: both are "300 or more", and this one is 400.
+                if (m.kind === 'automateLinuxTerminalMenu' && onItem && itemIdx >= 400) {
+                  const si = itemIdx - 400;
+                  const sessEntry = m.sessions[si];
+                  const noteResume = (msg: string, clearAfter: number) => {
+                    if (!ctxMenuRef.current || ctxMenuRef.current.kind !== 'automateLinuxTerminalMenu') return;
+                    const u: ContextMenuState = { ...ctxMenuRef.current, resumeIdx: msg ? si : -1, resumeMsg: msg };
+                    ctxMenuRef.current = u;
+                    setCtxMenu(u);
+                    // Only wipe the message we put there -- another row may have reported
+                    // something of its own while this one was counting down.
+                    if (clearAfter) setTimeout(() => {
+                      const cur = ctxMenuRef.current;
+                      if (cur?.kind === 'automateLinuxTerminalMenu' && cur.resumeIdx === si && cur.resumeMsg === msg) {
+                        noteResume('', 0);
+                      }
+                    }, clearAfter);
+                  };
+                  const keys = sessEntry ? resumeKeystrokes(sessEntry.sessionId) : null;
+                  if (!sessEntry) {
+                    closeMenu();
+                  } else if (!keys) {
+                    // No id to resume BY -- the session never fired a hook, so nothing on
+                    // disk names its transcript. Same answer the bookmark row gives.
+                    noteResume('▸ no session id yet', 3000);
+                  } else {
+                    // Typed into THIS TAB'S shell, which is the shell the session ran in --
+                    // so it comes back where it was, in the window that is already showing
+                    // its scrollback. A shell that is running something cannot be typed a
+                    // command line, so say that instead of delivering keystrokes to
+                    // whatever is reading (another claude in this tab, a build, an editor).
+                    const state = shellState(shell.pid);
+                    if (state === 'idle') {
+                      // Everything typing does, because this IS typing: come back from a
+                      // scrolled-back screen (the menu opens from one, and the resume would
+                      // otherwise start off-screen) and drop a selection whose highlight
+                      // would be left sitting over whatever text replaces it.
+                      if (term.buffer.active.viewportY !== term.buffer.active.baseY) term.scrollToBottom();
+                      selection.current = null;
+                      contentDirty.current = true;
+                      needsRefresh.current = true;
+                      shell.write(keys);
+                      closeMenu();
+                    }
+                    else if (state === 'busy') noteResume('▸ shell is busy here', 3000);
+                    else noteResume('▸ cannot read shell state', 3000);
+                  }
                   pos += sgrMatch[0].length; continue;
                 }
                 if (m.kind === 'automateLinuxTerminalMenu' && onItem && itemIdx >= 300) {
