@@ -15,19 +15,34 @@ import type { ShellState } from "./resume.js";
  *  what ends the shell after it. */
 export const EOT = "\x04";
 
-/** ^U ^K -- kill to the start of the line, then to its end. The prompt may hold something
- *  half-typed, and `exit` appended to it runs neither. Both kills go to readline's kill
+/** ^U ^K -- kill to the start of the line, then to its end.
+ *
+ *  Required, not tidiness: Ctrl+D at a bash prompt is EOF only on an EMPTY line. With
+ *  anything typed there it is delete-char instead, so the press would silently edit the
+ *  user's half-written command rather than end the shell. Both kills go to readline's kill
  *  ring, so Ctrl+Y brings the abandoned line back. */
 export const CLEAR_LINE = "\x15\x0b";
 
-/** The line that ends the shell.
+/** What ends the shell: the same key again, on a line cleared for it.
  *
- *  `exit` rather than a third Ctrl+D. EOF ends a shell only when the line is empty AND
- *  `IGNOREEOF` is unset -- neither is ours to assume about a login shell we did not write
- *  the rc for, and a Ctrl+D that is merely ignored leaves the tab open with no clue why.
- *  `exit` is a builtin: it means the same thing to bash, zsh and fish, and it fails loudly
- *  (`There are stopped jobs.`) instead of silently, which the row can then report. */
-export const SHELL_EXIT_LINE = `${CLEAR_LINE}exit\r`;
+ *  A third Ctrl+D, NOT a typed `exit`. This shipped typing the word, on the theory that EOF
+ *  is conditional (empty line, `IGNOREEOF` unset) and refuses silently where `exit` refuses
+ *  out loud. The second half is simply false -- measured in a pty on 2026-08-05, Ctrl+D
+ *  with a stopped job prints the identical `logout` / `There are stopped jobs.`, and under
+ *  `IGNOREEOF` it prints `Use "logout" to leave the shell.` Both refusals are equally
+ *  visible and equally detectable (the shell stays alive, which is what this checks), so
+ *  the argument for typing a word bought nothing and cost three things:
+ *
+ *  - **The keystroke is inert where the word is not.** These bytes go to whatever is reading
+ *    the pty. A Ctrl+D that arrives a moment early -- claude taking the second press with it
+ *    -- is just another EOF; `exit\r` arriving early is a line SUBMITTED to a model.
+ *  - It is the press the user makes. This row automates three Ctrl+Ds; substituting a
+ *    different mechanism for the last one is a second thing to reason about for no gain.
+ *  - `exit` lands in shell history. EOF does not.
+ *
+ *  `IGNOREEOF` is left to fail rather than worked around: no fallback chain, the shell stays
+ *  up, and the row says `shell did not exit`. */
+export const SHELL_EXIT_KEYS = `${CLEAR_LINE}${EOT}`;
 
 /** How long claude's exit stays armed, in ms.
  *
@@ -99,14 +114,15 @@ async function pollFor(io: ExitIo, done: () => boolean, timeoutMs: number): Prom
 }
 
 /**
- * Ctrl+D, Ctrl+D, `exit` -- with the state of the tab checked between each, and a reason on
+ * Ctrl+D, Ctrl+D, Ctrl+D -- with the state of the tab checked between each, and a reason on
  * the row for every way it can decline.
  *
- * The one invariant worth stating outright: **the shell exit line is never written while
- * claude is still alive.** `exit` typed into a claude is not a refusal that goes nowhere --
- * it is a prompt submitted to a model. So every path to it goes through the shell being
- * back at its own prompt, and a claude that would not leave ends the sequence rather than
- * falling through to the next step.
+ * The invariant worth stating outright: **the shell's press is never sent while claude is
+ * still alive.** Not because the byte would do damage (it is the same EOF claude is already
+ * being sent -- that inertness is exactly why it beats typing a word), but because sending
+ * it would mean the sequence had stopped knowing what it was talking to. So every path to
+ * the last press goes through the shell being back at its own prompt, and a claude that
+ * would not leave ends the sequence rather than falling through to the next step.
  */
 export async function runExitSequence(io: ExitIo): Promise<ExitOutcome> {
   const state = io.shellState();
@@ -124,21 +140,31 @@ export async function runExitSequence(io: ExitIo): Promise<ExitOutcome> {
       await io.wait(EOT_GAP_MS);
       io.write(EOT);
       // Claude leaving IS the shell coming back to its prompt -- one /proc read answers
-      // both, where asking pgrep for claude again would cost a process per poll.
-      gone = await pollFor(io, () => io.shellState() === 'idle', CLAUDE_EXIT_TIMEOUT_MS);
+      // both, where asking pgrep for claude again would cost a process per poll. The tab
+      // vanishing counts too: claude can exit on the FIRST press, and then the second is an
+      // EOF at a fresh prompt that takes the shell with it. Without that arm the poll waits
+      // on a prompt no process is left to draw and the retry types into a dead tab.
+      gone = await pollFor(io, () => !io.shellAlive() || io.shellState() === 'idle',
+                           CLAUDE_EXIT_TIMEOUT_MS);
     }
+    if (!io.shellAlive()) return { ok: true };
     // It stayed. Claude rebinds ctrl+d to half-page-down inside its transcript and settings
     // views, so the commonest cause is that the tab is not on the prompt the user thinks
     // it is -- and the honest answer to that is the one on the row, not a harder keystroke.
     if (!gone) return { ok: false, reason: 'claude did not exit' };
   }
-  // A shell that is idle but has not drawn its prompt yet would swallow the line, so wait
+  // A shell that is idle but has not drawn its prompt yet would swallow the press, so wait
   // for the state rather than for a guessed number of milliseconds.
-  if (!await pollFor(io, () => io.shellState() === 'idle', PROMPT_SETTLE_TIMEOUT_MS)) {
-    return { ok: false, reason: 'no prompt to exit from' };
-  }
+  const settled = await pollFor(io, () => io.shellState() === 'idle' || !io.shellAlive(),
+                                PROMPT_SETTLE_TIMEOUT_MS);
+  // The tab can already be gone: claude may exit between the two presses, and then the
+  // second one is an EOF at a fresh prompt -- which is precisely the last press this was
+  // about to send. Done is done; sending another into nothing would be the fallback this
+  // code does not write.
+  if (!io.shellAlive()) return { ok: true };
+  if (!settled) return { ok: false, reason: 'no prompt to exit from' };
   io.note?.('▸ closing terminal…');
-  io.write(SHELL_EXIT_LINE);
+  io.write(SHELL_EXIT_KEYS);
   // Success is the app dying under us (the shell's exit tears the terminal down), so this
   // resolves false only when the shell genuinely refused -- stopped jobs, most likely.
   const closed = await pollFor(io, () => !io.shellAlive(), SHELL_EXIT_TIMEOUT_MS);

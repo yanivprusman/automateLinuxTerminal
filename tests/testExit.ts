@@ -4,12 +4,12 @@
 // Driving it for real would mean a pty, a claude, and the better part of ten seconds per
 // case, so the sequence takes its world as an interface (ExitIo) and this fakes it with a
 // virtual clock. That buys the case that matters most and cannot be produced on demand
-// otherwise: a claude that will NOT leave. `exit` typed into a live claude is not a keystroke
-// that goes nowhere, it is a prompt submitted to a model, and the only thing standing
-// between the two is the ordering asserted below.
+// otherwise: a claude that will NOT leave. All three presses are the same byte, so nothing
+// about the LAST one is visible in what is written -- only in when it is written, and only
+// the ordering asserted below says the sequence still knew what it was talking to.
 //
 //   npx tsx tests/testExit.ts
-import { runExitSequence, EOT, SHELL_EXIT_LINE, EOT_GAP_MS, CLAUDE_DOUBLE_PRESS_WINDOW_MS,
+import { runExitSequence, EOT, SHELL_EXIT_KEYS, EOT_GAP_MS, CLAUDE_DOUBLE_PRESS_WINDOW_MS,
          CLAUDE_EXIT_TIMEOUT_MS, MAX_EXIT_ATTEMPTS, type ExitIo } from "../exit.js";
 import type { ShellState } from "../resume.js";
 
@@ -34,8 +34,10 @@ class FakeTab implements ExitIo {
     /** A shell with a child that is not a claude. */
     busyWithoutClaude?: boolean;
     unreadable?: boolean;
-    /** A shell that refuses `exit` (stopped jobs). */
+    /** A shell that refuses to leave (stopped jobs). */
     shellRefusesExit?: boolean;
+    /** The shell goes with claude: its second press lands at a fresh prompt as an EOF. */
+    shellDiesWithClaude?: boolean;
   }) {}
 
   private shellGone = false;
@@ -43,16 +45,20 @@ class FakeTab implements ExitIo {
   write(keys: string) {
     this.writes.push({ keys, at: this.clock });
     if (keys === EOT) this.presses++;
-    if (keys === SHELL_EXIT_LINE && !this.opts.shellRefusesExit) this.shellGone = true;
+    if (keys === SHELL_EXIT_KEYS && !this.opts.shellRefusesExit) this.shellGone = true;
   }
   shellState(): ShellState {
+    if (!this.shellAlive()) return 'unknown';        // /proc goes with the process
     if (this.opts.unreadable) return 'unknown';
     if (this.opts.busyWithoutClaude) return 'busy';
     const running = this.opts.claude && this.presses < this.opts.exitsAfterPresses;
     return running ? 'busy' : 'idle';
   }
   hasClaude() { return this.opts.claude; }
-  shellAlive() { return !this.shellGone; }
+  shellAlive() {
+    return !this.shellGone
+        && !(this.opts.shellDiesWithClaude && this.presses >= this.opts.exitsAfterPresses);
+  }
   async wait(ms: number) { this.clock += ms; }
   note(msg: string) { this.notes.push(msg); }
 
@@ -64,9 +70,9 @@ class FakeTab implements ExitIo {
   const tab = new FakeTab({ claude: true, exitsAfterPresses: 2 });
   const res = await runExitSequence(tab);
   if (!res.ok) fail(`a claude that exits reported "${(res as { reason: string }).reason}"`);
-  if (JSON.stringify(tab.typed) !== JSON.stringify([EOT, EOT, SHELL_EXIT_LINE]))
-    fail(`typed ${JSON.stringify(tab.typed)}, expected two Ctrl+Ds then the exit line`);
-  else ok("Ctrl+D, Ctrl+D, exit");
+  if (JSON.stringify(tab.typed) !== JSON.stringify([EOT, EOT, SHELL_EXIT_KEYS]))
+    fail(`typed ${JSON.stringify(tab.typed)}, expected two Ctrl+Ds then the shell's own`);
+  else ok("Ctrl+D, Ctrl+D, Ctrl+D");
   // The pair is only an exit inside claude's own 800ms window; a "wait a second between
   // presses" version of this loop would re-arm forever instead of leaving.
   const [first, second] = tab.writes.filter(w => w.keys === EOT);
@@ -80,17 +86,18 @@ class FakeTab implements ExitIo {
 
 // 2. THE CASE THIS FILE EXISTS FOR: a claude that will not leave (its transcript view
 //    rebinds ctrl+d to half-page-down, so this is reachable by simply being on the wrong
-//    screen). It must NEVER fall through to the shell exit line — that would post the word
-//    "exit" into the session as a prompt.
+//    screen). It must NEVER fall through to the shell's press: that press is only correct
+//    once the shell owns the pty again, and sending it into a live claude would mean the
+//    sequence had stopped knowing what it was talking to (it would also read as success).
 {
   const tab = new FakeTab({ claude: true, exitsAfterPresses: Infinity });
   const res = await runExitSequence(tab);
   if (res.ok) fail("a claude that never exits reported success");
   else if (!/claude did not exit/.test(res.reason)) fail(`reported "${res.reason}"`);
   else ok(`refused with "${res.reason}"`);
-  if (tab.typed.includes(SHELL_EXIT_LINE))
-    fail("typed the shell's exit line while claude was still alive — that submits 'exit' as a prompt");
-  else ok("never typed `exit` into a live claude");
+  if (tab.typed.includes(SHELL_EXIT_KEYS))
+    fail("sent the shell's press while claude was still alive");
+  else ok("never sent the shell's press into a live claude");
   if (tab.presses !== MAX_EXIT_ATTEMPTS * 2)
     fail(`sent ${tab.presses} presses, expected ${MAX_EXIT_ATTEMPTS} pairs`);
   // A retry is a retry of BOTH presses: a lone late Ctrl+D only re-arms the confirmation.
@@ -107,9 +114,9 @@ class FakeTab implements ExitIo {
   const tab = new FakeTab({ claude: false, exitsAfterPresses: 0 });
   const res = await runExitSequence(tab);
   if (!res.ok) fail(`an idle shell reported "${(res as { reason: string }).reason}"`);
-  if (JSON.stringify(tab.typed) !== JSON.stringify([SHELL_EXIT_LINE]))
-    fail(`typed ${JSON.stringify(tab.typed)}, expected the exit line alone`);
-  else ok("no claude: the exit line alone, no stray Ctrl+D");
+  if (JSON.stringify(tab.typed) !== JSON.stringify([SHELL_EXIT_KEYS]))
+    fail(`typed ${JSON.stringify(tab.typed)}, expected the shell's press alone`);
+  else ok("no claude: one press, on a cleared line");
 }
 
 // 4. BUSY WITH SOMETHING ELSE — a build, an editor, another terminal app. Keystrokes go to
@@ -139,6 +146,17 @@ class FakeTab implements ExitIo {
   const res = await runExitSequence(tab);
   if (res.ok || !/shell did not exit/.test((res as { reason: string }).reason)) fail(`reported ${JSON.stringify(res)}`);
   else ok(`refused with "${(res as { reason: string }).reason}"`);
+}
+
+// 7. THE RACE THE THIRD PRESS CREATES, now that it is the same key: claude can exit between
+//    the pair, so the SECOND press lands at a fresh shell prompt and takes the shell with it.
+//    Done is done — the sequence must report success, not send another press into nothing.
+{
+  const tab = new FakeTab({ claude: true, exitsAfterPresses: 2, shellDiesWithClaude: true });
+  const res = await runExitSequence(tab);
+  if (!res.ok) fail(`the shell going with claude reported "${(res as { reason: string }).reason}"`);
+  else ok("shell exited on claude's own second press — reported success");
+  if (tab.typed.length !== 2) fail(`typed ${JSON.stringify(tab.typed)} — a third press went into a dead tab`);
 }
 
 // Every reason has to fit the row it is drawn on (35 cells, less the "▸ " the app prepends).
