@@ -92,6 +92,14 @@ export interface ContextMenuState {
   voiceMutedAll: boolean;
   muteRowOff: number;
   muteMsg: string;
+  // The launch row: `cl --dangerously-skip-permissions` typed into this tab's own shell. It
+  // sits in its own segment directly above the exit's — the two are the tab's whole claude
+  // lifecycle, kept a rule apart so the destructive one still reads as destructive.
+  launchRowOff: number;
+  // Why it did not type, when it did not. Only ever a refusal (typing is instant, so there
+  // is no phase to report), so non-empty is the "this row is explaining itself" state and it
+  // is drawn red — same contract as the resume half of a session's head row.
+  launchMsg: string;
   // The exit row: Ctrl+D, Ctrl+D, `exit`, in one click. It sits above the "?" and below
   // everything else -- see computeMenuLayout for why it is never the LAST row.
   exitRowOff: number;

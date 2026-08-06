@@ -2,7 +2,7 @@ import React from "react";
 import { Box, Text } from "ink";
 import type { ContextMenuState, SessionHistoryEntry } from "./types.js";
 import { APP_VERSION } from "./session.js";
-import { SESSION_MENU_INNER, sessionMenuPad, sessionMenuBorder, formatElapsed, TOPIC_VIEW_WIDTH, TOPIC_PIN_CELLS, SESSION_ID_LABEL, SESSION_CWD_LABEL, SESSION_COPY_SHORT_LABEL, sessionResumeHead, marqueeWindow, editWindow, captionsLabel, replayLabel, exitLabel } from "./menu.js";
+import { SESSION_MENU_INNER, sessionMenuPad, sessionMenuBorder, formatElapsed, TOPIC_VIEW_WIDTH, TOPIC_PIN_CELLS, SESSION_ID_LABEL, SESSION_CWD_LABEL, SESSION_COPY_SHORT_LABEL, sessionResumeHead, marqueeWindow, editWindow, captionsLabel, replayLabel, launchLabel, exitLabel } from "./menu.js";
 import { useMarqueeTick } from "./marquee.js";
 
 /** The topic field: the pin box and the topic itself, on ONE row, closed off by a rule.
@@ -269,6 +269,29 @@ export function ContextMenuOverlay({ menu }: { menu: ContextMenuState }) {
             </Text>
           </>
         )}
+        {/* Starting a claude here: `cl --dangerously-skip-permissions` typed into this tab's
+            own shell, the same line by hand as by click. Green, because it is the one row in
+            this menu that BEGINS something — and next to the amber row below it that is the
+            whole of what the pair says at a glance.
+
+            Its own segment, a rule apart from the exit. They are the tab's claude lifecycle
+            and belong together at this end of the menu, but sharing a segment would put the
+            row that ends the session immediately under a harmless one and give the two the
+            same reading — which is exactly what the exit's mark and colour exist to prevent.
+
+            It says its flag. A claude started this way does not ask before it acts, and a
+            one-click row that quietly chose that would be a row lying about what it does. */}
+        <Text backgroundColor="#2d2d2d" color="#888888">{`├${sessionMenuBorder}┤`}</Text>
+        <Text>
+          <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
+          <Text
+            backgroundColor={menu.hoverItem === 41 ? "#3465a4" : "#2d2d2d"}
+            color={menu.launchMsg ? "#cc0000" : "#8ae234"}
+          >
+            {sessionMenuPad(menu.launchMsg ? ` ${menu.launchMsg}` : launchLabel())}
+          </Text>
+          <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
+        </Text>
         {/* Ending the tab: the three presses (Ctrl+D, Ctrl+D, then out of the shell) as one
             click. Its own segment, directly above the "?" — the far end of a menu that
             opens downwards from the clock, so it is the hardest row here to hit by

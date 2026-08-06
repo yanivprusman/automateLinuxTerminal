@@ -92,6 +92,22 @@ export const REPLAY_LABEL = "replay last caption";
 export const captionsLabel = () => ` ▤ ${CAPTIONS_LABEL}`;
 export const replayLabel = () => ` ↻ ${REPLAY_LABEL}`;
 
+/** What the launch row says: the thing it starts, and the flag it starts it with.
+ *
+ *  The flag is on the row rather than folded into a friendly verb. `cl` on its own is what
+ *  most of this menu's rows are about, but a claude started with
+ *  `--dangerously-skip-permissions` will not ask before it acts, and a one-click row that
+ *  quietly picks that is a row lying about what it does. It does not fit in full inside 35
+ *  cells with a verb in front of it, so the row carries the short form everyone already
+ *  says out loud and `launch.ts` holds the flag itself.
+ *
+ *  `+` is its mark -- one cell, guaranteed (it is ASCII, where every other candidate for
+ *  "new" is a geometric glyph of ambiguous East-Asian width that string-width scores 1 and
+ *  a terminal may still draw as two), and the universal sign for the thing this row is: one
+ *  more of something. Not `▸`, which is reserved for the messages this row also reports. */
+export const LAUNCH_LABEL = "start claude · skip permissions";
+export const launchLabel = () => ` + ${LAUNCH_LABEL}`;
+
 /** What the exit row says, and therefore what it does. Two labels because it is two
  *  different amounts of work: with a claude running here it is Ctrl+D, Ctrl+D, `exit` --
  *  the three presses this row exists to stop anyone having to remember -- and with none it
@@ -207,6 +223,14 @@ export function formatStopwatch(ms: number): string {
  *  because it flipped the global flag and needed no session — which is exactly how it came
  *  to silence every terminal on the machine from a row that reads like a tab's own.
  *
+ *  The launch row is a segment of its own too, directly above the exit's. The two are this
+ *  tab's whole claude lifecycle -- start one here, end the one here -- so they belong at the
+ *  same end of the menu, and reading them as a pair is the point. They are NOT one segment:
+ *  a rule between them is what keeps the exit row from reading as the second, equally
+ *  harmless half of a "claude" block, which is the exact failure the exit's own mark and
+ *  colour were introduced to fix. It also puts a whole row between the click that starts a
+ *  session and the click that ends one.
+ *
  *  The exit row is a segment of its own, and it sits directly ABOVE the "?" rather than
  *  under it — the last row anyone reaches for, but never the last row. Two reasons, both
  *  about the pointer: this menu opens downwards from the clock, so the far end of it is
@@ -240,13 +264,15 @@ export function computeMenuLayout(sessions: SessionHistoryEntry[], hasStopwatch:
     row++;                       // stopwatch separator
     stopwatchRow = row; row++;   // stopwatch
   }
+  row++;                         // launch separator
+  const launchRow = row; row++;  // start a claude here
   row++;                         // exit separator
   const exitRow = row; row++;    // end the claude here, then this terminal
   row++;                         // help separator
   const helpRow = row; row++;    // the "?"
   if (infoOpen) row++;           // the info line it opens
   row++;                         // bottom border
-  return { helpRow, exitRow, topicRow, muteRow, captionsRow, replayRow, sessionsRow, stopwatchRow, height: row };
+  return { helpRow, launchRow, exitRow, topicRow, muteRow, captionsRow, replayRow, sessionsRow, stopwatchRow, height: row };
 }
 
 export type SessionRowAction = 'copy' | 'bookmark' | 'resume';

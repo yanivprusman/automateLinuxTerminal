@@ -16,7 +16,7 @@ import { render, Box } from "ink";
 import { PassThrough } from "stream";
 import stringWidth from "string-width";
 import { ContextMenuOverlay } from "../ContextMenuOverlay.js";
-import { computeMenuLayout, sessionRowAt, topicRowItem, TOPIC_PIN_CELLS, SESSION_MENU_INNER, SESSION_ID_LABEL, SESSION_CWD_LABEL, SESSION_RESUME_CELLS, SESSION_RESUME_LABEL, SESSION_COPY_SHORT_LABEL, sessionResumeHead, CAPTIONS_LABEL, REPLAY_LABEL, captionsLabel, replayLabel, EXIT_LABEL_WITH_CLAUDE, EXIT_LABEL_BARE, exitLabel } from "../menu.js";
+import { computeMenuLayout, sessionRowAt, topicRowItem, TOPIC_PIN_CELLS, SESSION_MENU_INNER, SESSION_ID_LABEL, SESSION_CWD_LABEL, SESSION_RESUME_CELLS, SESSION_RESUME_LABEL, SESSION_COPY_SHORT_LABEL, sessionResumeHead, CAPTIONS_LABEL, REPLAY_LABEL, captionsLabel, replayLabel, LAUNCH_LABEL, launchLabel, EXIT_LABEL_WITH_CLAUDE, EXIT_LABEL_BARE, exitLabel } from "../menu.js";
 import type { ContextMenuState, SessionHistoryEntry } from "../types.js";
 
 // Mixed on purpose: a ticked and an unticked bookmark draw different text, and both have
@@ -46,6 +46,7 @@ async function drawMenu(infoOpen: boolean, voiceMutedAll = false, sess: SessionH
     currentSessionId: sessions[0].sessionId, captionsRowOff: layout.captionsRow, replayRowOff: layout.replayRow,
     captionsMsg: "", replayMsg: "", bookmarkIdx: -1, bookmarkMsg: "", resumeIdx: -1, resumeMsg: "",
     voiceMuted: true, voiceMutedAll, muteRowOff: layout.muteRow, muteMsg: "",
+    launchRowOff: layout.launchRow, launchMsg: "",
     exitRowOff: layout.exitRow, exitMsg: "", exitFailed: false,
   };
 
@@ -257,6 +258,31 @@ async function check(infoOpen: boolean) {
   if (!(layout.topicRow < layout.sessionsRow)) fail(`topic row ${layout.topicRow} is not above the session list at ${layout.sessionsRow}`);
   if (at(layout.sessionsRow)?.idx !== 0) fail(`sessionsRow ${layout.sessionsRow} is not the first session's line`);
 
+  // THE LAUNCH ROW — the other row that types into the shell, and the one that starts a
+  // claude with `--dangerously-skip-permissions`. A click that lands here by mistake starts
+  // an agent that will not ask before it acts, so where it is drawn and where it is claimed
+  // have to be the same row for exactly the reason the exit's do.
+  const launchLines = lines.map((l, i) => [l, i] as const).filter(([l]) => l.includes(LAUNCH_LABEL)).map(([, i]) => i);
+  console.log(`launch row: ${layout.launchRow} (drawn at ${launchLines.join(",")})`);
+  if (launchLines.length !== 1) fail(`expected exactly one launch row, drew ${launchLines.length}`);
+  else if (launchLines[0] !== layout.launchRow) fail(`launch drawn at ${launchLines[0]} but the layout says ${layout.launchRow}`);
+  const launchLine = lines[layout.launchRow] ?? "";
+  // The flag is on the row. "start claude" alone is true and misleading, and this is the one
+  // place the words a user reads before clicking are checked against what they get.
+  if (!/skip permissions/.test(launchLine))
+    fail(`the launch row does not name the permission skip: "${launchLine.trim()}"`);
+  if (at(layout.launchRow)) fail("the launch row also maps to a session — a click on it would copy or bookmark");
+  // Its own segment. Sharing one with the exit would put the row that ENDS the session
+  // directly under a harmless one and give the two the same reading, which is the failure
+  // the exit's own mark and colour were introduced to fix.
+  if (!(lines[layout.launchRow - 1] ?? "").startsWith("├")) fail(`no rule above the launch row: "${(lines[layout.launchRow - 1] ?? "").trim()}"`);
+  if (!(lines[layout.launchRow + 1] ?? "").startsWith("├")) fail(`no rule below the launch row: "${(lines[layout.launchRow + 1] ?? "").trim()}"`);
+  // Start above end: the pair reads in the order the lifecycle happens, and the row that
+  // ends the tab stays the last one anyone reaches for.
+  if (!(layout.launchRow < layout.exitRow)) fail(`the launch row ${layout.launchRow} is not above the exit at ${layout.exitRow}`);
+  if (layout.exitRow - layout.launchRow < 2) fail(`the launch and exit rows are adjacent (${layout.launchRow}, ${layout.exitRow}) — a misclick on one hits the other`);
+  if (!(layout.launchRow > layout.stopwatchRow)) fail(`the launch row ${layout.launchRow} is above the timer at ${layout.stopwatchRow}`);
+
   // THE EXIT ROW — the one row here that ends things. It types into the shell (Ctrl+D,
   // Ctrl+D, `exit`), so a click that lands on it by mistake, or a click meant for it that
   // lands elsewhere, is the worst kind of drift this file exists to catch.
@@ -330,7 +356,7 @@ await check(true);
 const shut = computeMenuLayout(sessions, true, false);
 const open = computeMenuLayout(sessions, true, true);
 if (open.height !== shut.height + 1) fail(`opening the info changed the height by ${open.height - shut.height}, expected 1`);
-for (const k of ["topicRow", "muteRow", "sessionsRow", "stopwatchRow", "exitRow", "helpRow"] as const) {
+for (const k of ["topicRow", "muteRow", "sessionsRow", "stopwatchRow", "launchRow", "exitRow", "helpRow"] as const) {
   if (open[k] !== shut[k]) fail(`opening the info moved ${k} by ${open[k] - shut[k]}, expected 0`);
 }
 
@@ -352,6 +378,12 @@ for (const k of ["topicRow", "muteRow", "sessionsRow", "stopwatchRow", "exitRow"
   const none = computeMenuLayout([], true, false);
   if (none.exitRow < 0) fail("a tab with no sessions cannot be closed from its own menu");
   if (!(none.exitRow < none.helpRow)) fail(`with no sessions the exit row ${none.exitRow} is not above the "?" at ${none.helpRow}`);
+  // The launch row is drawn for a tab that has never hosted a session — unlike the voice
+  // segment, which needs one to have a subject. A fresh tab with no claude in it yet is
+  // precisely when "start claude here" is the row someone opened this menu for, and hiding
+  // it there would leave the menu offering only ways to end a thing that never started.
+  if (none.launchRow < 0) fail("a tab with no sessions is not offered a claude to start");
+  if (!(none.launchRow < none.exitRow)) fail(`with no sessions the launch row ${none.launchRow} is not above the exit at ${none.exitRow}`);
 }
 
 // NO TWO ACTION ROWS WEAR THE SAME MARK.
@@ -365,10 +397,11 @@ for (const k of ["topicRow", "muteRow", "sessionsRow", "stopwatchRow", "exitRow"
 // (sessionMenuPad slices to 35), so a two-cell glyph reads as 35 in the source and draws 36
 // on screen — the right border walks off the menu on that row alone.
 {
-  const marks = { captions: captionsLabel(), replay: replayLabel(), exit: exitLabel(true), exitBare: exitLabel(false) };
+  const marks = { captions: captionsLabel(), replay: replayLabel(), launch: launchLabel(), exit: exitLabel(true), exitBare: exitLabel(false) };
   const markOf = (label: string) => label.trim()[0];
   console.log(`\nrow marks — ${Object.entries(marks).map(([k, v]) => `${k}: ${markOf(v)}`).join(", ")}`);
-  for (const [a, b] of [["captions", "replay"], ["captions", "exit"], ["replay", "exit"]] as const) {
+  for (const [a, b] of [["captions", "replay"], ["captions", "exit"], ["replay", "exit"],
+                        ["launch", "captions"], ["launch", "replay"], ["launch", "exit"]] as const) {
     if (markOf(marks[a]) === markOf(marks[b]))
       fail(`"${a}" and "${b}" wear the same mark "${markOf(marks[a])}" — the rows read as the same kind of thing`);
   }
