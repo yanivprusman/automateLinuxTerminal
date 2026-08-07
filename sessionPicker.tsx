@@ -2,9 +2,10 @@
  * Pick a Claude session by its topic, for the `claudeResume` shell function.
  *
  * Keyboard only, by design: this runs inside the embedded shell of
- * automateLinuxTerminal, whose outer app claims the wheel (scrollback) and
- * right-click (clipboard menu) before they ever reach the pty — so a
- * mouse-driven list here would silently do nothing.
+ * automateLinuxTerminal, whose outer app claims the wheel (scrollback),
+ * right-click (clipboard menu) and a left click on its clock (session menu)
+ * before they ever reach the pty — so a mouse-driven list here would silently
+ * do nothing.
  *
  * The choice goes to the --out file, never to stdout: stdout is Ink's canvas.
  * No selection written means the user quit; the caller must treat it as such.
@@ -470,7 +471,7 @@ if (sessions.length === 0) {
   console.error(
     unavailable > 0
       ? `sessionPicker: none of the ${unavailable} topics have a transcript on this machine`
-      : "sessionPicker: no sessions have a topic yet — set one from the session menu (right-click the clock)",
+      : "sessionPicker: no sessions have a topic yet — set one from the session menu (click the clock)",
   );
   process.exit(2);
 }

@@ -365,67 +365,76 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
       });
     };
 
-    const openMenu = (row: number, col: number) => {
+    // Where the clock is drawn (see the absolute Box at the bottom of this file). It is
+    // the ONE thing that says "this click is for the session menu", so it is a named
+    // predicate rather than a repeated inequality: the trigger (a LEFT press) has to ask
+    // the question before the click is forwarded to a child that grabbed the mouse.
+    const isClockRegion = (row: number, col: number) =>
+      row === 0 && col >= dimsRef.current.cols - 22;
+
+    const openSessionMenu = (row: number, col: number) => {
       const d = dimsRef.current;
-      const isClockRegion = row === 0 && col >= d.cols - 22;
-      if (isClockRegion) {
-        const history = sessionHistoryRef.current;
-        const info = detectClaudeSession(shell.pid);
-        if (info) {
-          const existing = history.find(e => e.sessionId === info.sessionId);
-          if (existing) {
-            existing.cwd = info.cwd;
-            existing.alive = true;
-          } else {
-            history.push({ sessionId: info.sessionId, cwd: info.cwd, pid: info.pid, startMs: Date.now(), alive: true, bookmarked: false });
-          }
+      const history = sessionHistoryRef.current;
+      const info = detectClaudeSession(shell.pid);
+      if (info) {
+        const existing = history.find(e => e.sessionId === info.sessionId);
+        if (existing) {
+          existing.cwd = info.cwd;
+          existing.alive = true;
+        } else {
+          history.push({ sessionId: info.sessionId, cwd: info.cwd, pid: info.pid, startMs: Date.now(), alive: true, bookmarked: false });
         }
-        for (const entry of history) {
-          if (entry.alive && !isPidAlive(entry.pid)) entry.alive = false;
-        }
-        // Re-read on every open rather than trusting what this tab last set: the
-        // same flag is toggled from the dashboard and the phone, and a checkbox
-        // showing this tab's last opinion of it would be wrong on sight.
-        const bookmarkedIds = readBookmarkedIds();
-        for (const entry of history) entry.bookmarked = bookmarkedIds.has(entry.sessionId);
-        // Who the voice segment (captions, replay) is about. currentSessionId() is the
-        // ONE authority on "the session in this tab" -- never re-derive it from the list
-        // below. It is empty only when no claude is running here now, and then the tab's
-        // own last session is the one whose captions you mean: it just ended in front of
-        // you, and "replay the last thing it said" is at its most wanted right then.
-        const voiceSessionId = currentSessionId() || history[history.length - 1]?.sessionId || null;
-        const sw = stopwatchRef.current;
-        let swMs = sw.accumulatedMs;
-        if (sw.running) swMs += Date.now() - sw.startMs;
-        const layout = computeMenuLayout(history, true, false);
-        const menuW = SESSION_MENU_INNER + 2;
-        // One row below the click, never on it: this menu opens FROM the clock, and a
-        // top border drawn on the clicked row sat exactly over the clock it came from.
-        const r = Math.max(0, Math.min(row + 1, d.rows - layout.height));
-        const c = Math.max(0, Math.min(col, d.cols - menuW));
-        ctxMenuRef.current = { kind: 'automateLinuxTerminalMenu', row: r, col: c, hasSelection: false, hoverItem: -1, sessions: [...history], stopwatchDisplay: formatStopwatch(swMs), stopwatchAction: sw.running ? 'stop' : 'start', stopwatchRowOff: layout.stopwatchRow, topic: topicRef.current, editingTopic: false, editBuffer: '', topicRowOff: layout.topicRow, sessionsRowOff: layout.sessionsRow, helpRowOff: layout.helpRow, infoOpen: false, showTopicBar: showTopicBarRef.current, copiedSessionIdx: -1, currentSessionId: voiceSessionId, captionsRowOff: layout.captionsRow, replayRowOff: layout.replayRow, captionsMsg: '', replayMsg: '', bookmarkIdx: -1, bookmarkMsg: '', resumeIdx: -1, resumeMsg: '', voiceMuted: voiceSessionId ? isVoiceMuted(voiceSessionId) : false, voiceMutedAll: isVoiceMutedGlobally(), muteRowOff: layout.muteRow, muteMsg: '', launchRowOff: layout.launchRow, launchMsg: '', exitRowOff: layout.exitRow, exitMsg: '', exitFailed: false };
-        if (sw.running) {
-          if (swTimerRef.current) clearInterval(swTimerRef.current);
-          swTimerRef.current = setInterval(() => {
-            if (!ctxMenuRef.current || ctxMenuRef.current.kind !== 'automateLinuxTerminalMenu') return;
-            const s = stopwatchRef.current;
-            if (!s.running) return;
-            const ms = s.accumulatedMs + (Date.now() - s.startMs);
-            const updated: ContextMenuState = { ...ctxMenuRef.current, stopwatchDisplay: formatStopwatch(ms) };
-            ctxMenuRef.current = updated;
-            setCtxMenu(updated);
-          }, 1000);
-        }
-      } else {
-        const menuH = 4, menuW = 10;
-        const r = Math.max(0, Math.min(row, d.rows - menuH));
-        const c = Math.max(0, Math.min(col, d.cols - menuW));
-        const hasSel = !!selection.current && (() => {
-          const s = normalizeSelection(selection.current!);
-          return !(s.startRow === s.endRow && s.startCol === s.endCol);
-        })();
-        ctxMenuRef.current = { kind: 'clipboard', row: r, col: c, hasSelection: hasSel, hoverItem: -1, sessions: [], stopwatchDisplay: null, stopwatchAction: null, stopwatchRowOff: 0, topic: '', editingTopic: false, editBuffer: '', topicRowOff: 0, sessionsRowOff: -1, helpRowOff: -1, infoOpen: false, showTopicBar: false, copiedSessionIdx: -1, currentSessionId: null, captionsRowOff: -1, replayRowOff: -1, captionsMsg: '', replayMsg: '', bookmarkIdx: -1, bookmarkMsg: '', resumeIdx: -1, resumeMsg: '', voiceMuted: false, voiceMutedAll: false, muteRowOff: -1, muteMsg: '', launchRowOff: -1, launchMsg: '', exitRowOff: -1, exitMsg: '', exitFailed: false };
       }
+      for (const entry of history) {
+        if (entry.alive && !isPidAlive(entry.pid)) entry.alive = false;
+      }
+      // Re-read on every open rather than trusting what this tab last set: the
+      // same flag is toggled from the dashboard and the phone, and a checkbox
+      // showing this tab's last opinion of it would be wrong on sight.
+      const bookmarkedIds = readBookmarkedIds();
+      for (const entry of history) entry.bookmarked = bookmarkedIds.has(entry.sessionId);
+      // Who the voice segment (captions, replay) is about. currentSessionId() is the
+      // ONE authority on "the session in this tab" -- never re-derive it from the list
+      // below. It is empty only when no claude is running here now, and then the tab's
+      // own last session is the one whose captions you mean: it just ended in front of
+      // you, and "replay the last thing it said" is at its most wanted right then.
+      const voiceSessionId = currentSessionId() || history[history.length - 1]?.sessionId || null;
+      const sw = stopwatchRef.current;
+      let swMs = sw.accumulatedMs;
+      if (sw.running) swMs += Date.now() - sw.startMs;
+      const layout = computeMenuLayout(history, true, false);
+      const menuW = SESSION_MENU_INNER + 2;
+      // One row below the click, never on it: this menu opens FROM the clock, and a
+      // top border drawn on the clicked row sat exactly over the clock it came from.
+      const r = Math.max(0, Math.min(row + 1, d.rows - layout.height));
+      const c = Math.max(0, Math.min(col, d.cols - menuW));
+      ctxMenuRef.current = { kind: 'automateLinuxTerminalMenu', row: r, col: c, hasSelection: false, hoverItem: -1, sessions: [...history], stopwatchDisplay: formatStopwatch(swMs), stopwatchAction: sw.running ? 'stop' : 'start', stopwatchRowOff: layout.stopwatchRow, topic: topicRef.current, editingTopic: false, editBuffer: '', topicRowOff: layout.topicRow, sessionsRowOff: layout.sessionsRow, helpRowOff: layout.helpRow, infoOpen: false, showTopicBar: showTopicBarRef.current, copiedSessionIdx: -1, currentSessionId: voiceSessionId, captionsRowOff: layout.captionsRow, replayRowOff: layout.replayRow, captionsMsg: '', replayMsg: '', bookmarkIdx: -1, bookmarkMsg: '', resumeIdx: -1, resumeMsg: '', voiceMuted: voiceSessionId ? isVoiceMuted(voiceSessionId) : false, voiceMutedAll: isVoiceMutedGlobally(), muteRowOff: layout.muteRow, muteMsg: '', launchRowOff: layout.launchRow, launchMsg: '', exitRowOff: layout.exitRow, exitMsg: '', exitFailed: false };
+      if (sw.running) {
+        if (swTimerRef.current) clearInterval(swTimerRef.current);
+        swTimerRef.current = setInterval(() => {
+          if (!ctxMenuRef.current || ctxMenuRef.current.kind !== 'automateLinuxTerminalMenu') return;
+          const s = stopwatchRef.current;
+          if (!s.running) return;
+          const ms = s.accumulatedMs + (Date.now() - s.startMs);
+          const updated: ContextMenuState = { ...ctxMenuRef.current, stopwatchDisplay: formatStopwatch(ms) };
+          ctxMenuRef.current = updated;
+          setCtxMenu(updated);
+        }, 1000);
+      }
+      setCtxMenu({ ...ctxMenuRef.current });
+      process.stdout.write('\x1b[?1003h');
+    };
+
+    const openClipboardMenu = (row: number, col: number) => {
+      const d = dimsRef.current;
+      const menuH = 4, menuW = 10;
+      const r = Math.max(0, Math.min(row, d.rows - menuH));
+      const c = Math.max(0, Math.min(col, d.cols - menuW));
+      const hasSel = !!selection.current && (() => {
+        const s = normalizeSelection(selection.current!);
+        return !(s.startRow === s.endRow && s.startCol === s.endCol);
+      })();
+      ctxMenuRef.current = { kind: 'clipboard', row: r, col: c, hasSelection: hasSel, hoverItem: -1, sessions: [], stopwatchDisplay: null, stopwatchAction: null, stopwatchRowOff: 0, topic: '', editingTopic: false, editBuffer: '', topicRowOff: 0, sessionsRowOff: -1, helpRowOff: -1, infoOpen: false, showTopicBar: false, copiedSessionIdx: -1, currentSessionId: null, captionsRowOff: -1, replayRowOff: -1, captionsMsg: '', replayMsg: '', bookmarkIdx: -1, bookmarkMsg: '', resumeIdx: -1, resumeMsg: '', voiceMuted: false, voiceMutedAll: false, muteRowOff: -1, muteMsg: '', launchRowOff: -1, launchMsg: '', exitRowOff: -1, exitMsg: '', exitFailed: false };
       setCtxMenu({ ...ctxMenuRef.current });
       process.stdout.write('\x1b[?1003h');
     };
@@ -869,7 +878,7 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
                 closeMenu();
               } else if (button === 2 && isPress) {
                 closeMenu();
-                openMenu(mRow, mCol);
+                openClipboardMenu(mRow, mCol);
               } else if (button === 64 || button === 65) {
                 closeMenu();
               }
@@ -955,7 +964,17 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
             if (button === 64) { term.scrollLines(-3); contentDirty.current = true; needsRefresh.current = true; }
             else if (button === 65) { term.scrollLines(3); contentDirty.current = true; needsRefresh.current = true; }
             else if (button === 2) {
-              if (isPress) openMenu(mRow, mCol);
+              if (isPress) openClipboardMenu(mRow, mCol);
+            }
+            // The session menu opens on a LEFT press on the clock — the click people
+            // already make at a thing they can see, where the right button was a
+            // guess. It is tested HERE, above both the forward-to-child branch and
+            // the selection branch, for the same reason the right button is: the
+            // clock is drawn by this app over whatever the child paints, so a click
+            // on it belongs to this app whether or not the child grabbed the mouse,
+            // and it must not also start a selection under the menu it just opened.
+            else if (button === 0 && isPress && isClockRegion(mRow, mCol)) {
+              openSessionMenu(mRow, mCol);
             }
             else if (term.modes.mouseTrackingMode !== 'none') {
               shell.write(sgrMatch[0]);
