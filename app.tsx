@@ -443,7 +443,15 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
       // top border drawn on the clicked row sat exactly over the clock it came from.
       const r = Math.max(0, Math.min(row + 1, d.rows - layout.height));
       const c = Math.max(0, Math.min(col, d.cols - menuW));
-      ctxMenuRef.current = { kind: 'automateLinuxTerminalMenu', row: r, col: c, hasSelection: false, hoverItem: -1, sessions: [...history], stopwatchDisplay: formatStopwatch(swMs), stopwatchAction: sw.running ? 'stop' : 'start', stopwatchRowOff: layout.stopwatchRow, topic: topicRef.current, editingTopic: false, editBuffer: '', topicRowOff: layout.topicRow, sessionsRowOff: layout.sessionsRow, helpRowOff: layout.helpRow, infoOpen: false, showTopicBar: showTopicBarRef.current, copiedSessionIdx: -1, currentSessionId: voiceSessionId, captionsRowOff: layout.captionsRow, replayRowOff: layout.replayRow, captionsMsg: '', replayMsg: '', bookmarkIdx: -1, bookmarkMsg: '', resumeIdx: -1, resumeMsg: '', voiceMuted: voiceSessionId ? isVoiceMuted(voiceSessionId) : false, voiceMutedAll: isVoiceMutedGlobally(), muteRowOff: layout.muteRow, muteMsg: '', launchRowOff: layout.launchRow, launchMsg: '', exitRowOff: layout.exitRow, exitMsg: '', exitFailed: false };
+      // The topic field opens FOCUSED, holding the topic it already has. Setting a topic is
+      // what this menu is opened for, and it was the one row that needed a second click
+      // before it would take a keystroke — the click that opened the menu landed on the
+      // clock, so the field was an inch away and did nothing until you found it again.
+      // Everything else here acts on a click; only this row has a keyboard to hand over,
+      // so handing it over on open costs the other rows nothing (they are still clicks) and
+      // costs a stray open nothing either: an untouched field is dismissed by exactly what
+      // used to dismiss the menu (see cancelTopicEditOrClose and topicRowItem).
+      ctxMenuRef.current = { kind: 'automateLinuxTerminalMenu', row: r, col: c, hasSelection: false, hoverItem: -1, sessions: [...history], stopwatchDisplay: formatStopwatch(swMs), stopwatchAction: sw.running ? 'stop' : 'start', stopwatchRowOff: layout.stopwatchRow, topic: topicRef.current, editingTopic: true, editBuffer: topicRef.current, topicRowOff: layout.topicRow, sessionsRowOff: layout.sessionsRow, helpRowOff: layout.helpRow, infoOpen: false, showTopicBar: showTopicBarRef.current, copiedSessionIdx: -1, currentSessionId: voiceSessionId, captionsRowOff: layout.captionsRow, replayRowOff: layout.replayRow, captionsMsg: '', replayMsg: '', bookmarkIdx: -1, bookmarkMsg: '', resumeIdx: -1, resumeMsg: '', voiceMuted: voiceSessionId ? isVoiceMuted(voiceSessionId) : false, voiceMutedAll: isVoiceMutedGlobally(), muteRowOff: layout.muteRow, muteMsg: '', launchRowOff: layout.launchRow, launchMsg: '', exitRowOff: layout.exitRow, exitMsg: '', exitFailed: false };
       if (sw.running) {
         if (swTimerRef.current) clearInterval(swTimerRef.current);
         swTimerRef.current = setInterval(() => {
@@ -482,6 +490,30 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
       process.stdout.write('\x1b[?1003l');
     };
 
+    /** What Escape — and every other key the topic field does not take — means, now that
+     *  the field is focused from the moment the menu opens.
+     *
+     *  Focused is not the same as typed in. A field still holding exactly the stored topic
+     *  has nothing to abandon, so the menu is in the state it was in before it auto-focused
+     *  anything, and everything that used to dismiss it from that state still does: one
+     *  Escape closes a menu opened by accident, as it always did. Two presses to undo one
+     *  stray click on the clock would be the whole cost of the auto-focus, paid by the
+     *  people who did not want it.
+     *
+     *  Once a single character differs the field owns the key: Escape drops what was typed
+     *  and leaves the menu standing, so one stray press cannot both lose the edit and hide
+     *  the row it was in. */
+    const cancelTopicEditOrClose = () => {
+      const m = ctxMenuRef.current;
+      if (m?.editingTopic && m.editBuffer !== m.topic) {
+        const upd: ContextMenuState = { ...m, editingTopic: false, editBuffer: '' };
+        ctxMenuRef.current = upd;
+        setCtxMenu(upd);
+        return;
+      }
+      closeMenu();
+    };
+
     const processInput = () => {
       if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
 
@@ -508,7 +540,7 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
                 else if (m.infoOpen && rowOff === m.helpRowOff + 1) itemIdx = 31;
                 // 20 = the topic field, 21 = its pin box. One row, split by COLUMN: the
                 // box is the first few cells, the field is the rest.
-                else if (rowOff === m.topicRowOff) itemIdx = topicRowItem(mCol - m.col, m.editingTopic);
+                else if (rowOff === m.topicRowOff) itemIdx = topicRowItem(mCol - m.col, m.editingTopic, m.editBuffer !== m.topic);
                 // 22/23/24 = the voice segment: mute, captions, replay. All three act on
                 // one session (m.currentSessionId), so they are single items like the
                 // topic -- not a band indexed by which block was clicked.
@@ -922,24 +954,12 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
             if (/^\x1b(\[(<([\d;]*)?)?)?$/.test(rest)) {
               inBuf = rest;
               flushTimer = setTimeout(() => {
-                if (ctxMenuRef.current?.editingTopic) {
-                  const upd: ContextMenuState = { ...ctxMenuRef.current, editingTopic: false, editBuffer: '' };
-                  ctxMenuRef.current = upd;
-                  setCtxMenu(upd);
-                  inBuf = '';
-                } else {
-                  closeMenu(); inBuf = '';
-                }
+                cancelTopicEditOrClose();
+                inBuf = '';
               }, 50);
               return;
             }
-            if (ctxMenuRef.current!.editingTopic) {
-              const upd: ContextMenuState = { ...ctxMenuRef.current!, editingTopic: false, editBuffer: '' };
-              ctxMenuRef.current = upd;
-              setCtxMenu(upd);
-              inBuf = ''; return;
-            }
-            closeMenu(); inBuf = ''; return;
+            cancelTopicEditOrClose(); inBuf = ''; return;
           }
           if (ctxMenuRef.current!.editingTopic) {
             const ch = inBuf[pos];
@@ -954,6 +974,14 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
               const upd: ContextMenuState = { ...m, editBuffer: m.editBuffer.slice(0, -1) };
               ctxMenuRef.current = upd;
               setCtxMenu(upd);
+            } else if (ch.charCodeAt(0) < 32 && m.editBuffer === m.topic) {
+              // A control key at a field that is focused but has not been typed into means
+              // what it meant before the field was focused at all: dismiss the menu. Same
+              // rule as Escape's (cancelTopicEditOrClose), for the same reason — a Ctrl+C
+              // aimed at getting out of a menu opened by accident must not be swallowed by
+              // a field with nothing in it. Once something has been typed the field keeps
+              // them, so a stray control key cannot silently drop an edit.
+              closeMenu(); inBuf = ''; return;
             } else if (ch.charCodeAt(0) >= 32) {
               // Bounded by what a topic sanely IS, not by what the menu row can hold:
               // an over-long topic scrolls in the row and in the bar, and the field

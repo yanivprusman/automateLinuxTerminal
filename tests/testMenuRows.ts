@@ -35,7 +35,7 @@ const fail = (msg: string) => { failures++; console.log("  FAIL " + msg); };
 
 // `sess` defaults to the fixture above; the exit row's label depends on whether any session
 // in the menu is still running, so one block below draws the same menu with none.
-async function drawMenu(infoOpen: boolean, voiceMutedAll = false, sess: SessionHistoryEntry[] = sessions) {
+async function drawMenu(infoOpen: boolean, voiceMutedAll = false, sess: SessionHistoryEntry[] = sessions, overrides: Partial<ContextMenuState> = {}) {
   const layout = computeMenuLayout(sess, true, infoOpen);
   const menu: ContextMenuState = {
     kind: "automateLinuxTerminalMenu", row: 0, col: 0, hasSelection: false, hoverItem: -1,
@@ -48,6 +48,7 @@ async function drawMenu(infoOpen: boolean, voiceMutedAll = false, sess: SessionH
     voiceMuted: true, voiceMutedAll, muteRowOff: layout.muteRow, muteMsg: "",
     launchRowOff: layout.launchRow, launchMsg: "",
     exitRowOff: layout.exitRow, exitMsg: "", exitFailed: false,
+    ...overrides,
   };
 
   const out = new PassThrough() as unknown as NodeJS.WriteStream;
@@ -109,10 +110,15 @@ async function check(infoOpen: boolean) {
     }
   });
 
-  // THE VOICE SEGMENT: mute, captions, replay — three consecutive rows, one of each, in
+  // THE VOICE SEGMENT: mute, replay, captions — three consecutive rows, one of each, in
   // that order, with a rule under them and none of them belonging to a session block.
   // They were a pair inside every block before; grouping them is the whole point of this
   // shape, and "one captions row per session" reappearing is what would undo it.
+  //
+  // The order is pinned, not just the grouping: replay is the light one (it speaks in
+  // place, the menu stays) and the one someone who missed a line opened this for, so it
+  // comes first. The overlay draws the two blocks in source order and the layout numbers
+  // them independently — nothing but this check keeps a click on one from doing the other.
   const captionsRows = lines.map((l, i) => [l, i] as const).filter(([l]) => l.includes(captionsLabel())).map(([, i]) => i);
   const replayRows = lines.map((l, i) => [l, i] as const).filter(([l]) => l.includes(replayLabel())).map(([, i]) => i);
   console.log(`voice segment — mute: ${layout.muteRow}, captions: ${captionsRows.join(",")}, replay: ${replayRows.join(",")}`);
@@ -120,13 +126,13 @@ async function check(infoOpen: boolean) {
   if (replayRows.length !== 1) fail(`expected exactly one replay row, drew ${replayRows.length}`);
   if (captionsRows[0] !== layout.captionsRow) fail(`captions drawn at ${captionsRows[0]} but the layout says ${layout.captionsRow}`);
   if (replayRows[0] !== layout.replayRow) fail(`replay drawn at ${replayRows[0]} but the layout says ${layout.replayRow}`);
-  if (layout.captionsRow !== layout.muteRow + 1)
-    fail(`captions at ${layout.captionsRow} is not directly under the mute at ${layout.muteRow} — the voice rows are split up`);
-  if (layout.replayRow !== layout.captionsRow + 1)
-    fail(`replay at ${layout.replayRow} is not directly under captions at ${layout.captionsRow}`);
+  if (layout.replayRow !== layout.muteRow + 1)
+    fail(`replay at ${layout.replayRow} is not directly under the mute at ${layout.muteRow} — the voice rows are split up`);
+  if (layout.captionsRow !== layout.replayRow + 1)
+    fail(`captions at ${layout.captionsRow} is not directly under replay at ${layout.replayRow}`);
   if (at(layout.captionsRow) || at(layout.replayRow)) fail("a voice row maps to a session block");
-  if (!(lines[layout.replayRow + 1] ?? "").startsWith("├"))
-    fail(`the voice segment is not closed off by a rule: row ${layout.replayRow + 1} is "${(lines[layout.replayRow + 1] ?? "").trim()}"`);
+  if (!(lines[layout.captionsRow + 1] ?? "").startsWith("├"))
+    fail(`the voice segment is not closed off by a rule: row ${layout.captionsRow + 1} is "${(lines[layout.captionsRow + 1] ?? "").trim()}"`);
 
   // The head row has to hold ALL of it: the label(s), the whole 8-character id, and the
   // elapsed time. This is what the menu's width is set from -- narrow it and the id (or
@@ -223,12 +229,18 @@ async function check(infoOpen: boolean) {
   const ruleLine = lines[layout.topicRow + 1] ?? "";
   if (!ruleLine.startsWith("├")) fail(`the row under the topic field is not a rule: "${ruleLine.trim()}"`);
   // Both halves of that one row: the box is the first TOPIC_PIN_CELLS cells (1-based from
-  // the border), the field is everything after -- and mid-edit the whole row commits.
-  if (topicRowItem(1, false) !== 21) fail("a click on the leading cell of the topic row does not hit the pin");
-  if (topicRowItem(TOPIC_PIN_CELLS, false) !== 21) fail(`a click ${TOPIC_PIN_CELLS} cells in does not hit the pin`);
-  if (topicRowItem(TOPIC_PIN_CELLS + 1, false) !== 20) fail("the cell after the pin box does not hit the topic field");
-  if (topicRowItem(SESSION_MENU_INNER, false) !== 20) fail("a click at the far end of the topic row does not hit the topic field");
-  if (topicRowItem(1, true) !== 20) fail("mid-edit, a click on the pin box does not commit the topic");
+  // the border), the field is everything after -- and with unfinished typing in the field
+  // the whole row commits.
+  if (topicRowItem(1, false, false) !== 21) fail("a click on the leading cell of the topic row does not hit the pin");
+  if (topicRowItem(TOPIC_PIN_CELLS, false, false) !== 21) fail(`a click ${TOPIC_PIN_CELLS} cells in does not hit the pin`);
+  if (topicRowItem(TOPIC_PIN_CELLS + 1, false, false) !== 20) fail("the cell after the pin box does not hit the topic field");
+  if (topicRowItem(SESSION_MENU_INNER, false, false) !== 20) fail("a click at the far end of the topic row does not hit the topic field");
+  if (topicRowItem(1, true, true) !== 20) fail("mid-edit, a click on the pin box does not commit the topic");
+  // The menu opens with the field FOCUSED, so focus alone must not claim the row: a pin
+  // box unreachable on every open -- and reachable only by a click that commits the topic
+  // first -- is what this pair of flags exists to prevent.
+  if (topicRowItem(1, true, false) !== 21) fail("a focused-but-untyped field swallows the pin box");
+  if (topicRowItem(TOPIC_PIN_CELLS + 1, true, false) !== 20) fail("a focused-but-untyped field does not keep its own half of the row");
   const swLine = lines[layout.stopwatchRow] ?? "";
   if (!swLine.includes("timer")) fail(`stopwatchRow ${layout.stopwatchRow} does not draw the timer: "${swLine.trim()}"`);
   if (at(layout.topicRow)) fail("the topic row also maps to a session");
@@ -245,11 +257,11 @@ async function check(infoOpen: boolean) {
   // It says NOTHING about all sessions while only this one is muted. The row silences the
   // tab it is in; a global mute is someone else's setting and only appears when it is on.
   if (/\ball\b/.test(muteLine)) fail(`muteRow claims a global scope with voiceMutedAll false: "${muteLine.trim()}"`);
-  // ...and it heads the voice segment: the captions and replay rows sit under it with no
+  // ...and it heads the voice segment: the replay and captions rows sit under it with no
   // rule between them (asserted in the voice-segment block above), and the session list
   // starts only after that segment is closed off.
-  if (layout.sessionsRow !== layout.replayRow + 2)
-    fail(`the session list starts at ${layout.sessionsRow}; expected the row after the voice segment's rule (${layout.replayRow + 2})`);
+  if (layout.sessionsRow !== layout.captionsRow + 2)
+    fail(`the session list starts at ${layout.sessionsRow}; expected the row after the voice segment's rule (${layout.captionsRow + 2})`);
 
   // The topic is the reason the menu gets opened, so it stays above a session list that
   // grows a block per running session. Reversing them would draw perfectly well and only
@@ -384,6 +396,32 @@ for (const k of ["topicRow", "muteRow", "sessionsRow", "stopwatchRow", "launchRo
   // it there would leave the menu offering only ways to end a thing that never started.
   if (none.launchRow < 0) fail("a tab with no sessions is not offered a claude to start");
   if (!(none.launchRow < none.exitRow)) fail(`with no sessions the launch row ${none.launchRow} is not above the exit at ${none.exitRow}`);
+}
+
+// THE ROW STILL SAYS WHAT IT IS FOR WHILE IT IS FOCUSED AND EMPTY.
+//
+// The menu opens with the cursor already in the topic field, so a tab that has no topic yet
+// draws this row mid-edit with nothing in the buffer — and that tab is exactly the one that
+// needs the words. Without them the row is a block cursor against blank cells, and the
+// label that says what to do with it is visible only once the field has been dismissed.
+{
+  const { layout, lines } = await drawMenu(false, false, sessions, { topic: "", editingTopic: true, editBuffer: "" });
+  const line = lines[layout.topicRow] ?? "";
+  console.log(`\nfocused empty topic row: "${line.trim()}"`);
+  if (!line.includes("set topic")) fail(`a focused empty topic row does not say what it is for: "${line.trim()}"`);
+  if (!line.includes("█")) fail(`a focused topic row does not draw its cursor: "${line.trim()}"`);
+  // The cursor is where typing goes, so it comes FIRST; the hint sits after it and is what
+  // the first character replaces. Reversed, the row reads as text already in the field.
+  if (line.indexOf("█") > line.indexOf("set topic")) fail(`the cursor is drawn after the hint: "${line.trim()}"`);
+  // Splitting the field into two coloured spans must not change how wide it is: the row is
+  // padded by counting characters, so a cell gained or lost walks the right border.
+  const widths = new Set(lines.map(l => stringWidth(l)));
+  if (widths.size !== 1) fail(`the menu's rows are no longer one width: ${[...widths].join(", ")}`);
+  // A topic that EXISTS is not competing with the hint -- it would read as part of the
+  // topic, and on a topic exactly at the row's width it would push the tail out of view.
+  const typed = await drawMenu(false, false, sessions, { topic: "voice", editingTopic: true, editBuffer: "voice" });
+  const typedLine = typed.lines[typed.layout.topicRow] ?? "";
+  if (typedLine.includes("set topic")) fail(`the hint is drawn beside a topic that is already set: "${typedLine.trim()}"`);
 }
 
 // NO TWO ACTION ROWS WEAR THE SAME MARK.

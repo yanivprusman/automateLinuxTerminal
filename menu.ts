@@ -26,12 +26,19 @@ export const TOPIC_VIEW_WIDTH = SESSION_MENU_INNER - TOPIC_PIN_CELLS - 1;
 /** What a click at `colOff` cells into the topic row means: 21 = the pin box, 20 = the
  *  topic field. They are one row now, so the column decides, not the row.
  *
- *  While the field is being EDITED the whole row commits: a box that pins a topic you
- *  have not finished typing pins the old one, which reads as the click having done
- *  nothing. `colOff` is 1-based from the menu's left border, as the mouse handler
- *  measures it. */
-export function topicRowItem(colOff: number, editing: boolean): 20 | 21 {
-  if (editing) return 20;
+ *  While there is UNFINISHED TYPING in the field the whole row commits: a box that pins a
+ *  topic you have not finished typing pins the old one, which reads as the click having
+ *  done nothing. `colOff` is 1-based from the menu's left border, as the mouse handler
+ *  measures it.
+ *
+ *  `edited` is why that is two flags and not one. The field is focused the moment the menu
+ *  opens (see `openSessionMenu`), so "being edited" stopped meaning "there is something
+ *  here you have not finished" — on that alone the pin box would be unreachable on every
+ *  single open, and reaching it would cost a click that commits the topic first. A buffer
+ *  that still equals the stored topic has nothing to lose, so the box stays exactly where
+ *  it was; the first character typed is what claims the row. */
+export function topicRowItem(colOff: number, editing: boolean, edited: boolean): 20 | 21 {
+  if (editing && edited) return 20;
   return colOff <= TOPIC_PIN_CELLS ? 21 : 20;
 }
 
@@ -208,10 +215,15 @@ export function formatStopwatch(ms: number): string {
  *  further from the pointer on every single open. At the bottom it also costs nothing to
  *  unfold: the info line it opens grows the menu downwards, moving no row above it.
  *
- *  The three voice rows are ONE segment of their own: the mute, the captions, and the
- *  replay. What is said aloud is a subject, and it is now grouped as one — reading down
- *  the segment gives you the whole of it (silence it / read it / hear it again) without
- *  the eye having to collect three rows from three places.
+ *  The three voice rows are ONE segment of their own: the mute, the replay, and the
+ *  captions. What is said aloud is a subject, and it is now grouped as one — reading down
+ *  the segment gives you the whole of it (silence it / hear the last line again / read all
+ *  of them) without the eye having to collect three rows from three places.
+ *
+ *  The replay comes BEFORE the captions. It is the row the segment is opened for — "say
+ *  that again" is what you want the moment a line has gone past — and it is the light one:
+ *  one click, it speaks, the menu stays and nothing else on screen moves. Opening the
+ *  caption window is the rarer and heavier of the two, and it was sitting in front.
  *
  *  All three act on THIS TAB'S session (`currentSessionId`), which is why they can be one
  *  row each instead of one per session block: a tab hosts one live claude, and the captions
@@ -246,8 +258,8 @@ export function computeMenuLayout(sessions: SessionHistoryEntry[], hasStopwatch:
   let muteRow = -1, captionsRow = -1, replayRow = -1;
   if (sessions.length > 0) {
     muteRow = row; row++;        // silence this tab's session
-    captionsRow = row; row++;    // this tab's captions
-    replayRow = row; row++;      // ...and the last of them, again
+    replayRow = row; row++;      // say the last line again
+    captionsRow = row; row++;    // ...or open the window with all of them
   }
   let sessionsRow = -1;
   if (sessions.length > 0) {

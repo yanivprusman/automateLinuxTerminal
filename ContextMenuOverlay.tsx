@@ -5,6 +5,12 @@ import { APP_VERSION } from "./session.js";
 import { SESSION_MENU_INNER, sessionMenuPad, sessionMenuBorder, formatElapsed, TOPIC_VIEW_WIDTH, TOPIC_PIN_CELLS, SESSION_ID_LABEL, SESSION_CWD_LABEL, SESSION_COPY_SHORT_LABEL, sessionResumeHead, marqueeWindow, editWindow, captionsLabel, replayLabel, launchLabel, exitLabel } from "./menu.js";
 import { useMarqueeTick } from "./marquee.js";
 
+/** What an empty topic row says it is for -- as the resting label of a tab with no topic,
+ *  and as the hint beside the cursor while the field is empty and focused. One constant
+ *  because the two are the same words in the same dim, and a field that invited you in
+ *  with different words than the row rested under would read as two different rows. */
+const TOPIC_PLACEHOLDER = "set topic…";
+
 /** The topic field: the pin box and the topic itself, on ONE row, closed off by a rule.
  *
  *  Setting a topic and pinning it are one thing done in two steps, and as two rows the
@@ -27,12 +33,27 @@ function TopicRow({ menu }: { menu: ContextMenuState }) {
     ? `${editWindow(menu.editBuffer, TOPIC_VIEW_WIDTH - 1)}█`
     : menu.topic
       ? marqueeWindow(menu.topic, TOPIC_VIEW_WIDTH, tick)
-      : "set topic…";
+      : TOPIC_PLACEHOLDER;
+  // The words stay next to the cursor while the field is empty. The menu opens with the
+  // cursor already in this field, so on a tab that has no topic yet -- the tab that most
+  // needs telling what the row is for -- the row would otherwise be a lone block cursor
+  // against 31 blank cells, and the one label that said "set topic…" would be visible only
+  // AFTER you dismissed the field it was inviting you into. Drawn in the same dim as the
+  // resting placeholder and after the cursor, so it reads as an invitation and not as text
+  // already typed: the first character replaces it.
+  const hint = menu.editingTopic && menu.editBuffer === "" ? TOPIC_PLACEHOLDER : "";
   const fieldWidth = SESSION_MENU_INNER - TOPIC_PIN_CELLS;
+  // The row is still padded to exactly `fieldWidth` -- the pad simply moves to the second
+  // span, where it is whitespace on the same background and so draws identically.
+  const fieldText = field.slice(0, fieldWidth);
+  const hintText = (hint + " ".repeat(fieldWidth)).slice(0, fieldWidth - fieldText.length);
   // The two halves highlight separately: they do different things, and this is the only
-  // row in the menu where the pointer's column decides which. Mid-edit the whole row
-  // commits, so the whole row lights up as one.
-  const pinHover = menu.hoverItem === 21 || (menu.editingTopic && menu.hoverItem === 20);
+  // row in the menu where the pointer's column decides which. With unfinished typing in
+  // the field the whole row commits, so the whole row lights up as one -- keyed off the
+  // same pair of facts `topicRowItem` routes the click by, since the field is focused from
+  // the moment the menu opens and focus alone no longer claims the row.
+  const pinHover = menu.hoverItem === 21
+    || (menu.editingTopic && menu.editBuffer !== menu.topic && menu.hoverItem === 20);
   return (
     <Text>
       <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
@@ -46,7 +67,13 @@ function TopicRow({ menu }: { menu: ContextMenuState }) {
         backgroundColor={menu.hoverItem === 20 ? "#3465a4" : "#2d2d2d"}
         color={menu.editingTopic ? "#ffffff" : (menu.topic ? "#ad7fa8" : "#666666")}
       >
-        {(field + " ".repeat(fieldWidth)).slice(0, fieldWidth)}
+        {fieldText}
+      </Text>
+      <Text
+        backgroundColor={menu.hoverItem === 20 ? "#3465a4" : "#2d2d2d"}
+        color="#666666"
+      >
+        {hintText}
       </Text>
       <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
     </Text>
@@ -160,10 +187,16 @@ export function ContextMenuOverlay({ menu }: { menu: ContextMenuState }) {
             sessions and the app; above it there is one thing, and it now ends somewhere
             visible instead of running into the next checkbox. */}
         <Text backgroundColor="#2d2d2d" color="#888888">{`├${sessionMenuBorder}┤`}</Text>
-        {/* The voice segment: silence this tab's session, read everything it has said
-            aloud (the Claude Voice history window, narrowed to it), and hear the last of
-            it again. One row each, not one per session block — a tab hosts one live
+        {/* The voice segment: silence this tab's session, hear the last thing it said
+            again, and read everything it has said aloud (the Claude Voice history window,
+            narrowed to it). One row each, not one per session block — a tab hosts one live
             claude, and its voice is the voice this menu is about.
+
+            Replay sits above captions: it is the light one — it speaks in place and the
+            menu stays — and it is what someone who missed a line came here for. The row
+            order is `computeMenuLayout`'s (replayRow then captionsRow); these two blocks
+            are drawn in that order and nothing but that agreement keeps a click on one
+            from doing the other, which is what tests/testMenuRows.ts renders and checks.
 
             Replay plays even when the box above is ticked: an explicit click is not a
             line arriving on its own, and refusing it silently would read as a dead row.
@@ -199,20 +232,20 @@ export function ContextMenuOverlay({ menu }: { menu: ContextMenuState }) {
             <Text>
               <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
               <Text
-                backgroundColor={menu.hoverItem === 23 ? "#3465a4" : "#2d2d2d"}
-                color={menu.captionsMsg ? "#34e2e2" : "#729fcf"}
+                backgroundColor={menu.hoverItem === 24 ? "#3465a4" : "#2d2d2d"}
+                color={menu.replayMsg ? "#34e2e2" : "#729fcf"}
               >
-                {sessionMenuPad(menu.captionsMsg ? ` ${menu.captionsMsg}` : captionsLabel())}
+                {sessionMenuPad(menu.replayMsg ? ` ${menu.replayMsg}` : replayLabel())}
               </Text>
               <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
             </Text>
             <Text>
               <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
               <Text
-                backgroundColor={menu.hoverItem === 24 ? "#3465a4" : "#2d2d2d"}
-                color={menu.replayMsg ? "#34e2e2" : "#729fcf"}
+                backgroundColor={menu.hoverItem === 23 ? "#3465a4" : "#2d2d2d"}
+                color={menu.captionsMsg ? "#34e2e2" : "#729fcf"}
               >
-                {sessionMenuPad(menu.replayMsg ? ` ${menu.replayMsg}` : replayLabel())}
+                {sessionMenuPad(menu.captionsMsg ? ` ${menu.captionsMsg}` : captionsLabel())}
               </Text>
               <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
             </Text>
