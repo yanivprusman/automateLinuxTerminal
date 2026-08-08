@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import { render, Box, Text, useStdout, useStdin } from "ink";
-import { createWriteStream } from "fs";
+import { createWriteStream, statSync } from "fs";
 import type { WriteStream } from "fs";
 import { spawn } from "child_process";
 import pty from "node-pty";
@@ -156,8 +156,43 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
         }
       });
     }
+    // The recording is the one piece of this tab the dashboard reads by PATH while
+    // we hold an open fd to the INODE. Anything that unlinks or replaces the path
+    // leaves us writing into an orphan: the recording keeps growing, invisibly, and
+    // the card freezes at the moment of the unlink — a live session showing output
+    // hours old (2026-08-08, session d56ebbab: two hours into a deleted inode). The
+    // dashboard's /ended handler now refuses to unlink a live session's log, but a
+    // writer that never notices its own file is gone is wrong regardless of who
+    // removes it, so reconcile here too. Checked on a timer, not per write: this is
+    // the per-keystroke path and a stat on every byte would be absurd.
+    let scriptLogIno = 0;
+    let scriptLogOpening = false;
+    let scriptLogWatchId: ReturnType<typeof setInterval> | null = null;
+    const openScriptLog = () => {
+      scriptLogOpening = true;
+      const stream = createWriteStream(SCRIPT_LOG_FILE, { flags: 'a' });
+      stream.on('open', () => {
+        try { scriptLogIno = statSync(SCRIPT_LOG_FILE).ino; } catch { scriptLogIno = 0; }
+        scriptLogOpening = false;
+      });
+      // A write error must not take the tab down with it — the recording is a
+      // convenience for the dashboard, not something the shell depends on.
+      stream.on('error', () => { scriptLogOpening = false; });
+      scriptLogStream = stream;
+    };
     if (SCRIPT_LOG_FILE) {
-      scriptLogStream = createWriteStream(SCRIPT_LOG_FILE, { flags: 'a' });
+      openScriptLog();
+      scriptLogWatchId = setInterval(() => {
+        if (scriptLogOpening) return;
+        let ino = 0;
+        try { ino = statSync(SCRIPT_LOG_FILE).ino; } catch { ino = 0; }
+        // ino === 0 means the path is gone; a different ino means someone put a
+        // new file where ours was. Both mean our fd no longer feeds the reader.
+        if (ino === scriptLogIno) return;
+        const previous = scriptLogStream;
+        openScriptLog();
+        try { previous?.end(); } catch {}
+      }, 5000);
     }
 
     // The shell reports its directory with OSC 7 and xterm consumes it while
@@ -1068,6 +1103,7 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
       clearInterval(titleSyncId);
       clearInterval(topicSyncId);
       if (swTimerRef.current) clearInterval(swTimerRef.current);
+      if (scriptLogWatchId) clearInterval(scriptLogWatchId);
       if (scriptLogStream) scriptLogStream.end();
       cleanupMetadata();
       notifySessionEnded();
@@ -1081,6 +1117,7 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
       clearInterval(titleSyncId);
       clearInterval(topicSyncId);
       if (swTimerRef.current) clearInterval(swTimerRef.current);
+      if (scriptLogWatchId) clearInterval(scriptLogWatchId);
       if (flushTimer) clearTimeout(flushTimer);
       stdin?.off("data", handleInput);
       shell.kill();
