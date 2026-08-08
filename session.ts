@@ -467,6 +467,47 @@ function liveSessionOf(claudePid: number): string {
   } catch { return 'unknown'; }
 }
 
+/**
+ * How far up the parent chain from [pid] the shell sits, or -1 if it does not.
+ * 0 means the shell is this process's own parent.
+ */
+function depthBelowShell(pid: number, shellPid: number): number {
+  let current = pid;
+  for (let i = 0; i < 10; i++) {
+    try {
+      const stat = readFileSync(`/proc/${current}/stat`, 'utf-8');
+      const ppid = parseInt(stat.split(') ')[1]?.split(' ')[1] || '0');
+      if (ppid === shellPid) return i;
+      if (ppid <= 1) return -1;
+      current = ppid;
+    } catch { return -1; }
+  }
+  return -1;
+}
+
+/**
+ * The Claude session running in THIS tab — **the shallowest `claude` under our
+ * shell, not merely the first one found.**
+ *
+ * The depth is the whole point. A headless `claude -p` started from inside the
+ * session — the session namer, an improver, any script that shells out to Claude
+ * — is a descendant of the tab's own claude (tool → bash → node → claude), so it
+ * is strictly DEEPER than the tab's claude, which the shell started itself. Both
+ * pass "is a descendant of our shell", and this used to return whichever `pgrep`
+ * happened to list first.
+ *
+ * When it picked the nested one, the tab reported that throwaway run as the
+ * session it was hosting: [registerWithDashboard] filed it under this tab's key,
+ * the dashboard found no row with that brand-new claude id to dedup against, and
+ * created a SECOND row — the same tab, twice on the phone, one card wearing a
+ * session id that lived for two seconds. Nothing pruned it either, because it
+ * carried this tab's live shell pid. Measured 2026-08-08: `/set-topic-skill`
+ * minted one every time it ran.
+ *
+ * Depth is the right discriminator rather than sniffing for `-p` or a session-id
+ * flag, because it does not depend on how the nested run was invoked — anything
+ * spawned from within the session is below the session, by construction.
+ */
 export function detectClaudeSession(shellPid: number): ClaudeSessionInfo | null {
   let pids: number[];
   try {
@@ -475,30 +516,25 @@ export function detectClaudeSession(shellPid: number): ClaudeSessionInfo | null 
   } catch {
     return null;
   }
+  let best: { pid: number; depth: number } | null = null;
   for (const pid of pids) {
-    let current = pid;
-    for (let i = 0; i < 10; i++) {
-      try {
-        const stat = readFileSync(`/proc/${current}/stat`, 'utf-8');
-        const ppid = parseInt(stat.split(') ')[1]?.split(' ')[1] || '0');
-        if (ppid === shellPid) {
-          const sessionId = liveSessionOf(pid);
-          let cwd: string | null = null;
-          try {
-            cwd = readFileSync(`/proc/${pid}/cwd`, 'utf-8').replace(/\0/g, '');
-          } catch {
-            try {
-              cwd = execFileSync('readlink', [`/proc/${pid}/cwd`], { encoding: 'utf-8', timeout: 500 }).trim();
-            } catch {}
-          }
-          return { sessionId, cwd, pid };
-        }
-        if (ppid <= 1) break;
-        current = ppid;
-      } catch { break; }
-    }
+    const depth = depthBelowShell(pid, shellPid);
+    if (depth < 0) continue;
+    if (!best || depth < best.depth) best = { pid, depth };
+    if (depth === 0) break;   // nothing can be shallower — stop reading /proc
   }
-  return null;
+  if (!best) return null;
+
+  const sessionId = liveSessionOf(best.pid);
+  let cwd: string | null = null;
+  try {
+    cwd = readFileSync(`/proc/${best.pid}/cwd`, 'utf-8').replace(/\0/g, '');
+  } catch {
+    try {
+      cwd = execFileSync('readlink', [`/proc/${best.pid}/cwd`], { encoding: 'utf-8', timeout: 500 }).trim();
+    } catch {}
+  }
+  return { sessionId, cwd, pid: best.pid };
 }
 
 export function isPidAlive(pid: number): boolean {

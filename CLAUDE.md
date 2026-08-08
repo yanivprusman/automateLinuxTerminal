@@ -73,6 +73,14 @@ A topic longer than the row it is drawn in **scrolls like a sign** rather than b
 - **The session's `launched from …` row scrolls on the same machinery** (`CwdRow`). A path is unbounded where a topic is merely long, and the row used to cut its HEAD off with a leading `…` — throwing away exactly the part that tells `/opt/dev/x` from `/opt/prod/x`. Like the topic, it is its own component so only a row with something out of view runs a clock.
 - The session picker clips topics instead (`pad`) — it draws one per row, and a screenful of things sliding at once is noise, not information.
 
+## Which claude the tab reports (`detectClaudeSession`)
+
+**The shallowest `claude` under our shell wins — not the first one found.** A tab regularly has more than one: anything the session shells out to Claude for (the session namer, an improver, a skill running `claude -p`) is also a descendant of our shell, just deeper, because it was started from *inside* the session. `pgrep` lists by ascending pid, so before this the winner was whichever happened to start first.
+
+- **The cost was a duplicate session, and it did not go away on its own.** `registerWithDashboard` files whatever this returns under *this tab's* key. Hand it a two-second `claude -p` id and the dashboard finds no row carrying that id to dedup against, so it creates a SECOND row — the same tab twice on the phone's session list and voice widget. It carried this tab's live shell pid, so no liveness sweep would ever prune it. Measured 2026-08-08: `/set-topic-skill` minted one on every run.
+- **Depth is the discriminator rather than sniffing for `-p` or a session-id flag**, because it does not depend on how the nested run was invoked. Anything spawned from within the session is below the session, by construction — and if the tab's own claude exits, its children reparent away from our shell and stop matching at all, so a dead tab cannot be represented by the run it left behind.
+- `tests/testDetectClaudeDepth.ts` builds that tree for real — a `claude` at depth 1 started *first* so it holds the lower pid, and the tab's own at depth 0 — and asserts the shallow one is chosen. It fails against the old implementation. Two traps it cost: `/bin/sleep` is a coreutils **multi-call** binary that refuses to run under another `argv[0]`, so the stand-in symlinks `bash`; and pid **1** is useless as a "no claude here" probe, since init is an ancestor of every orphan and matches the walk by construction.
+
 ## Session picker (`sessionPicker.tsx`)
 
 A standalone Ink app that lists Claude sessions by the **topic** set in the session menu, so a session can be resumed by what it was about instead of by UUID. The `claudeResume` shell function (automateLinux `terminal/functions/claude.sh`) runs it and resumes whatever it returns; `claudeResumeById <uuid>` is the direct-by-id path.
