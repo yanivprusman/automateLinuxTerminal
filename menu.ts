@@ -168,16 +168,11 @@ export function marqueeWindow(text: string, width: number, tick: number): string
   return (cycle + cycle).slice(start, start + width);
 }
 
-/** What an over-long topic looks like while it is being TYPED: the tail, so the cursor
- *  stays in view, with a leading ellipsis marking the part scrolled off.
- *
- *  Editing deliberately does NOT marquee — a field that slides out from under the cursor
- *  cannot be typed into. */
-export function editWindow(text: string, width: number): string {
-  if (width <= 0) return "";
-  if (text.length <= width) return text;
-  return "…" + text.slice(-(width - 1));
-}
+/** What an over-long topic looks like while it is being TYPED lives in `topicEdit.ts`
+ *  (`editView`), with the rest of the field's keyboard. It used to be an `editWindow(text,
+ *  width)` here that could only ever show the TAIL — which was the whole truth while the
+ *  only editing key the field took was Backspace-at-the-end, and became a lie the moment the
+ *  caret could sit anywhere. */
 
 export function formatElapsed(ms: number): string {
   const secs = Math.floor((Date.now() - ms) / 1000);

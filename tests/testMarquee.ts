@@ -7,7 +7,7 @@
 // changes width and tears the menu's borders.
 //
 //   npx tsx tests/testMarquee.ts
-import { marqueeWindow, editWindow, TOPIC_VIEW_WIDTH, MARQUEE_HOLD_STEPS, TOPIC_MAX_CHARS, topicBarWidth, TOPIC_BAR_MAX_WIDTH } from "../menu.js";
+import { marqueeWindow, TOPIC_VIEW_WIDTH, MARQUEE_HOLD_STEPS, topicBarWidth, TOPIC_BAR_MAX_WIDTH } from "../menu.js";
 
 let failures = 0;
 const fail = (msg: string) => { failures++; console.log("  FAIL " + msg); };
@@ -65,12 +65,9 @@ if (!wrapFrame.includes("   ")) fail(`no gap where the sign wraps: ${JSON.string
 eq(marqueeWindow(long, 0, 3), "", "zero width draws nothing");
 eq(marqueeWindow(long, -5, 3), "", "negative width draws nothing");
 
-// Typing scrolls to the CURSOR, never marquees: the tail stays visible, with the clipped
-// head marked. A field that slid while you typed could not be typed into.
-eq(editWindow("short", 10), "short", "short edit buffer untouched");
-eq(editWindow("abcdefghij", 10), "abcdefghij", "exactly-fitting edit buffer untouched");
-eq(editWindow("abcdefghijkl", 10), "…defghijkl", "long edit buffer shows its tail");
-if (editWindow("x".repeat(TOPIC_MAX_CHARS), W - 1).length !== W - 1) fail("edit window overflowed its field");
+// What the field looks like while it is being TYPED is `editView`, in topicEdit.ts, and is
+// pinned by tests/testTopicEdit.ts -- it follows the caret rather than a clock, so it has
+// nothing to do with the sign this file is about.
 
 // The bar's cap tracks the terminal, and never inverts on a narrow one.
 if (topicBarWidth(200) !== TOPIC_BAR_MAX_WIDTH) fail("wide terminal should cap the bar at TOPIC_BAR_MAX_WIDTH");

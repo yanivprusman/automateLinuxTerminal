@@ -2,7 +2,8 @@ import React from "react";
 import { Box, Text } from "ink";
 import type { ContextMenuState, SessionHistoryEntry } from "./types.js";
 import { APP_VERSION } from "./session.js";
-import { SESSION_MENU_INNER, sessionMenuPad, sessionMenuBorder, formatElapsed, TOPIC_VIEW_WIDTH, TOPIC_PIN_CELLS, SESSION_ID_LABEL, SESSION_CWD_LABEL, SESSION_COPY_SHORT_LABEL, sessionResumeHead, marqueeWindow, editWindow, captionsLabel, replayLabel, launchLabel, exitLabel } from "./menu.js";
+import { SESSION_MENU_INNER, sessionMenuPad, sessionMenuBorder, formatElapsed, TOPIC_VIEW_WIDTH, TOPIC_PIN_CELLS, SESSION_ID_LABEL, SESSION_CWD_LABEL, SESSION_COPY_SHORT_LABEL, sessionResumeHead, marqueeWindow, captionsLabel, replayLabel, launchLabel, exitLabel } from "./menu.js";
+import { editView } from "./topicEdit.js";
 import { useMarqueeTick } from "./marquee.js";
 
 /** What an empty topic row says it is for -- as the resting label of a tab with no topic,
@@ -27,26 +28,52 @@ const TOPIC_PLACEHOLDER = "set topic…";
 function TopicRow({ menu }: { menu: ContextMenuState }) {
   const scrolls = !menu.editingTopic && menu.topic.length > TOPIC_VIEW_WIDTH;
   const tick = useMarqueeTick(scrolls, menu.topic);
-  // While typing, the tail is what matters (the cursor is there), so the field scrolls to
-  // the cursor instead of marqueeing; the block cursor takes the last cell.
-  const field = menu.editingTopic
-    ? `${editWindow(menu.editBuffer, TOPIC_VIEW_WIDTH - 1)}█`
-    : menu.topic
-      ? marqueeWindow(menu.topic, TOPIC_VIEW_WIDTH, tick)
-      : TOPIC_PLACEHOLDER;
-  // The words stay next to the cursor while the field is empty. The menu opens with the
-  // cursor already in this field, so on a tab that has no topic yet -- the tab that most
-  // needs telling what the row is for -- the row would otherwise be a lone block cursor
-  // against 31 blank cells, and the one label that said "set topic…" would be visible only
-  // AFTER you dismissed the field it was inviting you into. Drawn in the same dim as the
-  // resting placeholder and after the cursor, so it reads as an invitation and not as text
-  // already typed: the first character replaces it.
-  const hint = menu.editingTopic && menu.editBuffer === "" ? TOPIC_PLACEHOLDER : "";
+  // While typing, the field is anchored to the CARET rather than marqueed -- a field that
+  // slides out from under the caret cannot be typed into -- and shows the cells around
+  // wherever the next character will go, with a `…` on each end that still has text beyond
+  // it. `editView` (topicEdit.ts) owns that window, and guarantees the caret is never the
+  // cell a marker took.
+  const view = menu.editingTopic ? editView(menu.editBuffer, menu.editCursor, TOPIC_VIEW_WIDTH) : null;
   const fieldWidth = SESSION_MENU_INNER - TOPIC_PIN_CELLS;
-  // The row is still padded to exactly `fieldWidth` -- the pad simply moves to the second
-  // span, where it is whitespace on the same background and so draws identically.
-  const fieldText = field.slice(0, fieldWidth);
-  const hintText = (hint + " ".repeat(fieldWidth)).slice(0, fieldWidth - fieldText.length);
+  const fieldBg = menu.hoverItem === 20 ? "#3465a4" : "#2d2d2d";
+  // The row is padded to exactly `fieldWidth` however many spans it takes -- they are all
+  // whitespace on the same background, so where the pad ends up draws identically. A cell
+  // gained or lost here walks this row's right border off the menu.
+  const spans: React.ReactNode[] = [];
+  if (view) {
+    // The caret is one cell. PAST the last character there is nothing to reverse, so it is
+    // the block glyph this field has always drawn; OVER a character it reverses that cell,
+    // which is the only way the character stays readable underneath it.
+    const atEnd = menu.editCursor >= menu.editBuffer.length;
+    const before = view.text.slice(0, view.caret);
+    const under = view.text.slice(view.caret, view.caret + 1) || " ";
+    const after = view.text.slice(view.caret + 1);
+    // The words stay next to the caret while the field is empty. The menu opens with the
+    // caret already in this field, so on a tab that has no topic yet -- the tab that most
+    // needs telling what the row is for -- the row would otherwise be a lone block cursor
+    // against 31 blank cells, and the one label that said "set topic…" would be visible only
+    // AFTER you dismissed the field it was inviting you into. Drawn in the same dim as the
+    // resting placeholder and after the caret, so it reads as an invitation and not as text
+    // already typed: the first character replaces it.
+    const rest = (menu.editBuffer === "" ? TOPIC_PLACEHOLDER : "") + " ".repeat(fieldWidth);
+    spans.push(
+      <Text key="before" backgroundColor={fieldBg} color="#ffffff">{before}</Text>,
+      atEnd
+        ? <Text key="caret" backgroundColor={fieldBg} color="#ffffff">{"█"}</Text>
+        : <Text key="caret" backgroundColor="#ffffff" color="#2d2d2d">{under}</Text>,
+      <Text key="after" backgroundColor={fieldBg} color="#ffffff">{after}</Text>,
+      <Text key="rest" backgroundColor={fieldBg} color="#666666">
+        {rest.slice(0, Math.max(0, fieldWidth - before.length - 1 - after.length))}
+      </Text>,
+    );
+  } else {
+    const resting = menu.topic ? marqueeWindow(menu.topic, TOPIC_VIEW_WIDTH, tick) : TOPIC_PLACEHOLDER;
+    spans.push(
+      <Text key="resting" backgroundColor={fieldBg} color={menu.topic ? "#ad7fa8" : "#666666"}>
+        {(resting + " ".repeat(fieldWidth)).slice(0, fieldWidth)}
+      </Text>,
+    );
+  }
   // The two halves highlight separately: they do different things, and this is the only
   // row in the menu where the pointer's column decides which. With unfinished typing in
   // the field the whole row commits, so the whole row lights up as one -- keyed off the
@@ -63,18 +90,7 @@ function TopicRow({ menu }: { menu: ContextMenuState }) {
       >
         {` ${menu.showTopicBar ? "☑" : "☐"} `}
       </Text>
-      <Text
-        backgroundColor={menu.hoverItem === 20 ? "#3465a4" : "#2d2d2d"}
-        color={menu.editingTopic ? "#ffffff" : (menu.topic ? "#ad7fa8" : "#666666")}
-      >
-        {fieldText}
-      </Text>
-      <Text
-        backgroundColor={menu.hoverItem === 20 ? "#3465a4" : "#2d2d2d"}
-        color="#666666"
-      >
-        {hintText}
-      </Text>
+      {spans}
       <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
     </Text>
   );

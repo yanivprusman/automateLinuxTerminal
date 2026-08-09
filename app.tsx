@@ -10,7 +10,8 @@ const { Terminal: XTerminal } = xterm;
 import type { Span, Line, Selection, ContextMenuState, SessionHistoryEntry } from "./types.js";
 import { SESSION_ID, LAUNCH_DIR, SCRIPT_LOG_FILE, publishSessionMetadata, writeTopic, writePidTopic, propagateTopicToDashboard, fetchStoredTopic, readStoredTopic, cleanupMetadata, notifySessionEnded, detectClaudeSession, noteLiveSessionId, currentSessionId, isPidAlive, claimHostWindow, publishWindowClaim, readBookmarkedIds, setBookmarked } from "./session.js";
 import { EMPTY_SPAN, spansEqual, normalizeSelection, readBufferRow, readBuffer } from "./buffer.js";
-import { SESSION_MENU_INNER, formatStopwatch, computeMenuLayout, sessionRowAt, topicRowItem, TOPIC_MAX_CHARS, topicBarWidth, marqueeWindow } from "./menu.js";
+import { SESSION_MENU_INNER, formatStopwatch, computeMenuLayout, sessionRowAt, topicRowItem, topicBarWidth, marqueeWindow } from "./menu.js";
+import { topicKeyAt, applyTopicAction, insertTopicText } from "./topicEdit.js";
 import { useMarqueeTick } from "./marquee.js";
 import { ContextMenuOverlay } from "./ContextMenuOverlay.js";
 import { clipboardWrite, clipboardRead } from "./clipboard.js";
@@ -451,7 +452,7 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
       // so handing it over on open costs the other rows nothing (they are still clicks) and
       // costs a stray open nothing either: an untouched field is dismissed by exactly what
       // used to dismiss the menu (see cancelTopicEditOrClose and topicRowItem).
-      ctxMenuRef.current = { kind: 'automateLinuxTerminalMenu', row: r, col: c, hasSelection: false, hoverItem: -1, sessions: [...history], stopwatchDisplay: formatStopwatch(swMs), stopwatchAction: sw.running ? 'stop' : 'start', stopwatchRowOff: layout.stopwatchRow, topic: topicRef.current, editingTopic: true, editBuffer: topicRef.current, topicRowOff: layout.topicRow, sessionsRowOff: layout.sessionsRow, helpRowOff: layout.helpRow, infoOpen: false, showTopicBar: showTopicBarRef.current, copiedSessionIdx: -1, currentSessionId: voiceSessionId, captionsRowOff: layout.captionsRow, replayRowOff: layout.replayRow, captionsMsg: '', replayMsg: '', bookmarkIdx: -1, bookmarkMsg: '', resumeIdx: -1, resumeMsg: '', voiceMuted: voiceSessionId ? isVoiceMuted(voiceSessionId) : false, voiceMutedAll: isVoiceMutedGlobally(), muteRowOff: layout.muteRow, muteMsg: '', launchRowOff: layout.launchRow, launchMsg: '', exitRowOff: layout.exitRow, exitMsg: '', exitFailed: false };
+      ctxMenuRef.current = { kind: 'automateLinuxTerminalMenu', row: r, col: c, hasSelection: false, hoverItem: -1, sessions: [...history], stopwatchDisplay: formatStopwatch(swMs), stopwatchAction: sw.running ? 'stop' : 'start', stopwatchRowOff: layout.stopwatchRow, topic: topicRef.current, editingTopic: true, editBuffer: topicRef.current, editCursor: topicRef.current.length, topicRowOff: layout.topicRow, sessionsRowOff: layout.sessionsRow, helpRowOff: layout.helpRow, infoOpen: false, showTopicBar: showTopicBarRef.current, copiedSessionIdx: -1, currentSessionId: voiceSessionId, captionsRowOff: layout.captionsRow, replayRowOff: layout.replayRow, captionsMsg: '', replayMsg: '', bookmarkIdx: -1, bookmarkMsg: '', resumeIdx: -1, resumeMsg: '', voiceMuted: voiceSessionId ? isVoiceMuted(voiceSessionId) : false, voiceMutedAll: isVoiceMutedGlobally(), muteRowOff: layout.muteRow, muteMsg: '', launchRowOff: layout.launchRow, launchMsg: '', exitRowOff: layout.exitRow, exitMsg: '', exitFailed: false };
       if (sw.running) {
         if (swTimerRef.current) clearInterval(swTimerRef.current);
         swTimerRef.current = setInterval(() => {
@@ -477,7 +478,7 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
         const s = normalizeSelection(selection.current!);
         return !(s.startRow === s.endRow && s.startCol === s.endCol);
       })();
-      ctxMenuRef.current = { kind: 'clipboard', row: r, col: c, hasSelection: hasSel, hoverItem: -1, sessions: [], stopwatchDisplay: null, stopwatchAction: null, stopwatchRowOff: 0, topic: '', editingTopic: false, editBuffer: '', topicRowOff: 0, sessionsRowOff: -1, helpRowOff: -1, infoOpen: false, showTopicBar: false, copiedSessionIdx: -1, currentSessionId: null, captionsRowOff: -1, replayRowOff: -1, captionsMsg: '', replayMsg: '', bookmarkIdx: -1, bookmarkMsg: '', resumeIdx: -1, resumeMsg: '', voiceMuted: false, voiceMutedAll: false, muteRowOff: -1, muteMsg: '', launchRowOff: -1, launchMsg: '', exitRowOff: -1, exitMsg: '', exitFailed: false };
+      ctxMenuRef.current = { kind: 'clipboard', row: r, col: c, hasSelection: hasSel, hoverItem: -1, sessions: [], stopwatchDisplay: null, stopwatchAction: null, stopwatchRowOff: 0, topic: '', editingTopic: false, editBuffer: '', editCursor: 0, topicRowOff: 0, sessionsRowOff: -1, helpRowOff: -1, infoOpen: false, showTopicBar: false, copiedSessionIdx: -1, currentSessionId: null, captionsRowOff: -1, replayRowOff: -1, captionsMsg: '', replayMsg: '', bookmarkIdx: -1, bookmarkMsg: '', resumeIdx: -1, resumeMsg: '', voiceMuted: false, voiceMutedAll: false, muteRowOff: -1, muteMsg: '', launchRowOff: -1, launchMsg: '', exitRowOff: -1, exitMsg: '', exitFailed: false };
       setCtxMenu({ ...ctxMenuRef.current });
       process.stdout.write('\x1b[?1003h');
     };
@@ -506,7 +507,7 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
     const cancelTopicEditOrClose = () => {
       const m = ctxMenuRef.current;
       if (m?.editingTopic && m.editBuffer !== m.topic) {
-        const upd: ContextMenuState = { ...m, editingTopic: false, editBuffer: '' };
+        const upd: ContextMenuState = { ...m, editingTopic: false, editBuffer: '', editCursor: 0 };
         ctxMenuRef.current = upd;
         setCtxMenu(upd);
         return;
@@ -859,11 +860,15 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
                     const newTopic = m.editBuffer.trim();
                     topicRef.current = newTopic; writeTopic(newTopic); writePidTopic(newTopic);
                     propagateTopicToDashboard(newTopic);
-                    const upd: ContextMenuState = { ...m, topic: newTopic, editingTopic: false, editBuffer: '' };
+                    const upd: ContextMenuState = { ...m, topic: newTopic, editingTopic: false, editBuffer: '', editCursor: 0 };
                     ctxMenuRef.current = upd;
                     setCtxMenu(upd);
                   } else {
-                    const upd: ContextMenuState = { ...m, editingTopic: true, editBuffer: m.topic };
+                    // Re-focusing puts the caret at the END, where the menu's own open puts
+                    // it: the click that lands here is on a row, not on a character (the
+                    // column decides pin-vs-field and nothing finer), so there is no place
+                    // in the text it could honestly mean.
+                    const upd: ContextMenuState = { ...m, editingTopic: true, editBuffer: m.topic, editCursor: m.topic.length };
                     ctxMenuRef.current = upd;
                     setCtxMenu(upd);
                   }
@@ -951,7 +956,31 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
               }
               pos += sgrMatch[0].length; continue;
             }
-            if (/^\x1b(\[(<([\d;]*)?)?)?$/.test(rest)) {
+            // THE FIELD GETS FIRST REFUSAL ON EVERY ESCAPE SEQUENCE WHILE IT IS FOCUSED.
+            //
+            // An arrow, Home/End, Delete and their Ctrl/Alt word-wise forms are keys a text
+            // field owns; here they used to fall straight through to the line below, so
+            // pressing Left to fix a typo three characters back DELETED THE WHOLE EDIT (or,
+            // on an untouched field, closed the menu). `topicKeyAt` answers null for
+            // everything the field does not claim -- a function key, a mouse report that got
+            // this far -- and those still dismiss, exactly as before.
+            const editing = ctxMenuRef.current!;
+            if (editing.editingTopic) {
+              const key = topicKeyAt(rest);
+              if (key) {
+                const next = applyTopicAction({ buffer: editing.editBuffer, cursor: editing.editCursor }, key.action);
+                const upd: ContextMenuState = { ...editing, editBuffer: next.buffer, editCursor: next.cursor };
+                ctxMenuRef.current = upd;
+                setCtxMenu(upd);
+                pos += key.consumed; continue;
+              }
+            }
+            // A sequence that is still ARRIVING is not a key that means anything yet. The
+            // test covers a CSI's parameters too (`\x1b[1;5` on its way to a Ctrl+Left), not
+            // just the mouse prefixes it was written for: a sequence split across two reads
+            // would otherwise be read as a bare Escape and throw the edit away -- the exact
+            // failure this whole block exists to stop, arriving by timing instead.
+            if (/^\x1b(\[[\d;<]*|O)?$/.test(rest)) {
               inBuf = rest;
               flushTimer = setTimeout(() => {
                 cancelTopicEditOrClose();
@@ -970,11 +999,22 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
               propagateTopicToDashboard(newTopic);
               closeMenu();
               inBuf = ''; return;
-            } else if (ch === '\x7f' || ch === '\x08') {
-              const upd: ContextMenuState = { ...m, editBuffer: m.editBuffer.slice(0, -1) };
+            }
+            // Backspace, and the readline control keys the field claims (Ctrl+A/E/B/F for
+            // the ends and the caret, Ctrl+U/K/W for the three kills). They are checked
+            // BEFORE the dismiss rule below, so they work on an untouched field too -- a
+            // caret that only moves once you have typed something is a caret you cannot use
+            // to fix the topic you came here to fix. Ctrl+C and Ctrl+D are deliberately not
+            // among them (topicEdit.ts says why), so the way out of this menu is unchanged.
+            const key = topicKeyAt(ch);
+            if (key) {
+              const next = applyTopicAction({ buffer: m.editBuffer, cursor: m.editCursor }, key.action);
+              const upd: ContextMenuState = { ...m, editBuffer: next.buffer, editCursor: next.cursor };
               ctxMenuRef.current = upd;
               setCtxMenu(upd);
-            } else if (ch.charCodeAt(0) < 32 && m.editBuffer === m.topic) {
+              pos += key.consumed; continue;
+            }
+            if (ch.charCodeAt(0) < 32 && m.editBuffer === m.topic) {
               // A control key at a field that is focused but has not been typed into means
               // what it meant before the field was focused at all: dismiss the menu. Same
               // rule as Escape's (cancelTopicEditOrClose), for the same reason — a Ctrl+C
@@ -982,15 +1022,16 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
               // a field with nothing in it. Once something has been typed the field keeps
               // them, so a stray control key cannot silently drop an edit.
               closeMenu(); inBuf = ''; return;
-            } else if (ch.charCodeAt(0) >= 32) {
-              // Bounded by what a topic sanely IS, not by what the menu row can hold:
-              // an over-long topic scrolls in the row and in the bar, and the field
-              // itself scrolls to the cursor while it is typed.
-              if (m.editBuffer.length < TOPIC_MAX_CHARS) {
-                const upd: ContextMenuState = { ...m, editBuffer: m.editBuffer + ch };
-                ctxMenuRef.current = upd;
-                setCtxMenu(upd);
-              }
+            }
+            if (ch.charCodeAt(0) >= 32) {
+              // Typed AT the caret, not on the end. Bounded by what a topic sanely IS
+              // (TOPIC_MAX_CHARS, in insertTopicText) rather than by what the menu row can
+              // hold: an over-long topic scrolls in the row and in the bar, and the field
+              // itself follows the caret while it is typed.
+              const next = insertTopicText({ buffer: m.editBuffer, cursor: m.editCursor }, ch);
+              const upd: ContextMenuState = { ...m, editBuffer: next.buffer, editCursor: next.cursor };
+              ctxMenuRef.current = upd;
+              setCtxMenu(upd);
             }
             pos++; continue;
           }

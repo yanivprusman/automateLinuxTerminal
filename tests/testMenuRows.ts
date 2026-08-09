@@ -40,7 +40,7 @@ async function drawMenu(infoOpen: boolean, voiceMutedAll = false, sess: SessionH
   const menu: ContextMenuState = {
     kind: "automateLinuxTerminalMenu", row: 0, col: 0, hasSelection: false, hoverItem: -1,
     sessions: sess, stopwatchDisplay: "00:00", stopwatchAction: "start",
-    stopwatchRowOff: layout.stopwatchRow, topic: "voice", editingTopic: false, editBuffer: "",
+    stopwatchRowOff: layout.stopwatchRow, topic: "voice", editingTopic: false, editBuffer: "", editCursor: 0,
     topicRowOff: layout.topicRow, sessionsRowOff: layout.sessionsRow, helpRowOff: layout.helpRow, infoOpen,
     showTopicBar: true, copiedSessionIdx: -1,
     currentSessionId: sessions[0].sessionId, captionsRowOff: layout.captionsRow, replayRowOff: layout.replayRow,
@@ -405,7 +405,7 @@ for (const k of ["topicRow", "muteRow", "sessionsRow", "stopwatchRow", "launchRo
 // needs the words. Without them the row is a block cursor against blank cells, and the
 // label that says what to do with it is visible only once the field has been dismissed.
 {
-  const { layout, lines } = await drawMenu(false, false, sessions, { topic: "", editingTopic: true, editBuffer: "" });
+  const { layout, lines } = await drawMenu(false, false, sessions, { topic: "", editingTopic: true, editBuffer: "", editCursor: 0 });
   const line = lines[layout.topicRow] ?? "";
   console.log(`\nfocused empty topic row: "${line.trim()}"`);
   if (!line.includes("set topic")) fail(`a focused empty topic row does not say what it is for: "${line.trim()}"`);
@@ -419,9 +419,35 @@ for (const k of ["topicRow", "muteRow", "sessionsRow", "stopwatchRow", "launchRo
   if (widths.size !== 1) fail(`the menu's rows are no longer one width: ${[...widths].join(", ")}`);
   // A topic that EXISTS is not competing with the hint -- it would read as part of the
   // topic, and on a topic exactly at the row's width it would push the tail out of view.
-  const typed = await drawMenu(false, false, sessions, { topic: "voice", editingTopic: true, editBuffer: "voice" });
+  const typed = await drawMenu(false, false, sessions, { topic: "voice", editingTopic: true, editBuffer: "voice", editCursor: 5 });
   const typedLine = typed.lines[typed.layout.topicRow] ?? "";
   if (typedLine.includes("set topic")) fail(`the hint is drawn beside a topic that is already set: "${typedLine.trim()}"`);
+}
+
+// THE CARET IS DRAWN WHERE IT IS, AND THE ROW KEEPS ITS WIDTH AROUND IT.
+//
+// The field is split into spans so the caret can sit ON a character (reversed) instead of
+// only after the last one — and the row is padded by counting characters, so a cell gained
+// or lost in that arithmetic walks this row's right border off the menu while every other
+// row keeps it. The old field could not fail this way: it was one span with the block glyph
+// glued to the end.
+{
+  const mid = await drawMenu(false, false, sessions, { topic: "voice", editingTopic: true, editBuffer: "voice", editCursor: 2 });
+  const line = mid.lines[mid.layout.topicRow] ?? "";
+  console.log(`\ntopic row, caret mid-word: "${line.trim()}"`);
+  if (!line.includes("voice")) fail(`the topic is not drawn whole around the caret: "${line.trim()}"`);
+  // Past the last character there is nothing to reverse, so the block glyph is the caret;
+  // over a character it is a reversed cell, and the glyph must NOT also be drawn (two carets
+  // in one field is worse than none).
+  if (line.includes("█")) fail(`a caret inside the text still draws the block glyph: "${line.trim()}"`);
+  const widths = new Set(mid.lines.map(l => stringWidth(l)));
+  if (widths.size !== 1) fail(`with the caret mid-text the menu's rows are no longer one width: ${[...widths].join(", ")}`);
+  // At the end it IS the glyph, exactly as the field has always drawn it.
+  const end = await drawMenu(false, false, sessions, { topic: "voice", editingTopic: true, editBuffer: "voice", editCursor: 5 });
+  const endLine = end.lines[end.layout.topicRow] ?? "";
+  if (!endLine.includes("voice█")) fail(`the caret at the end is not the block after the topic: "${endLine.trim()}"`);
+  const endWidths = new Set(end.lines.map(l => stringWidth(l)));
+  if (endWidths.size !== 1) fail(`with the caret at the end the menu's rows are no longer one width: ${[...endWidths].join(", ")}`);
 }
 
 // NO TWO ACTION ROWS WEAR THE SAME MARK.

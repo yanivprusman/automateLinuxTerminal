@@ -42,6 +42,12 @@ export interface ContextMenuState {
   topic: string;
   editingTopic: boolean;
   editBuffer: string;
+  // Where the caret sits in `editBuffer` — characters to its LEFT, so `editBuffer.length` is
+  // "past the last one". The field was append-only before this existed: Backspace took the
+  // last character and every arrow key fell through to the branch that dismisses the menu,
+  // so fixing a typo three characters back meant retyping the topic. `topicEdit.ts` owns
+  // what each key does to the pair, and what the field looks like at a given caret.
+  editCursor: number;
   topicRowOff: number;
   // Where the first session line is drawn, -1 when there are none. The list no longer
   // starts at a fixed offset -- the topic section above it, and the info line the "?"
