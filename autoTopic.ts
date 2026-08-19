@@ -181,6 +181,12 @@ function askForTopic(prompt: string): string | null {
       DENIED_TOOLS,
       // Naming three words must not wait on this peer's MCP servers starting.
       "--strict-mcp-config",
+      // An empty cwd is not enough — the USER-global CLAUDE.md still loads, and
+      // its speak-every-reply rule makes a Bash-denied haiku answer "please
+      // approve the say command" instead of a name, every call. No settings
+      // sources means no CLAUDE.md and no memory: the prompt is the whole world.
+      "--setting-sources",
+      "",
     ],
     {
       // Via stdin, not argv: `--disallowedTools` is variadic and would swallow a
