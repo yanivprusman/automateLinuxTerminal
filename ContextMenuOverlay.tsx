@@ -2,7 +2,7 @@ import React from "react";
 import { Box, Text } from "ink";
 import type { ContextMenuState, SessionHistoryEntry } from "./types.js";
 import { APP_VERSION } from "./session.js";
-import { SESSION_MENU_INNER, sessionMenuPad, sessionMenuBorder, formatElapsed, TOPIC_VIEW_WIDTH, TOPIC_PIN_CELLS, SESSION_ID_LABEL, SESSION_CWD_LABEL, SESSION_COPY_SHORT_LABEL, sessionResumeHead, marqueeWindow, captionsLabel, replayLabel, launchLabel, exitLabel } from "./menu.js";
+import { SESSION_MENU_INNER, sessionMenuPad, sessionMenuBorder, muteLabelParts, muteRowColors, formatElapsed, TOPIC_VIEW_WIDTH, TOPIC_PIN_CELLS, SESSION_ID_LABEL, SESSION_CWD_LABEL, SESSION_COPY_SHORT_LABEL, sessionResumeHead, marqueeWindow, captionsLabel, replayLabel, launchLabel, exitLabel } from "./menu.js";
 import { editView } from "./topicEdit.js";
 import { useMarqueeTick } from "./marquee.js";
 
@@ -233,18 +233,25 @@ export function ContextMenuOverlay({ menu }: { menu: ContextMenuState }) {
                 make the click that follows a no-op, and leaving the row silent about it
                 makes a working voice look broken — so the box keeps saying what THIS
                 session's flag is, and the suffix says why you still hear nothing. */}
-            <Text>
-              <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
-              <Text
-                backgroundColor={menu.hoverItem === 22 ? "#3465a4" : "#2d2d2d"}
-                color={menu.muteMsg || menu.voiceMuted || menu.voiceMutedAll ? "#cc0000" : "#888888"}
-              >
-                {sessionMenuPad(menu.muteMsg
-                  ? ` ${menu.muteMsg}`
-                  : `${menu.voiceMuted ? " ☑" : " ☐"} mute voice${menu.voiceMutedAll ? " · all muted" : ""}`)}
-              </Text>
-              <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
-            </Text>
+            {(() => {
+              // Drawn as two spans so the two flags keep their own colour. The box is red
+              // for THIS session's mute only; the suffix carries the global one. As one
+              // span they shared a colour, and a global mute someone set on the phone made
+              // the box red whether it was ticked or not -- the row then looked the same
+              // before and after every click, which reads as a control that does nothing.
+              const [box, note] = muteLabelParts(menu.voiceMuted, menu.voiceMutedAll, menu.muteMsg);
+              const [boxColor, noteColor] = muteRowColors(menu.voiceMuted, menu.voiceMutedAll, menu.muteMsg);
+              const padded = sessionMenuPad(box + note);   // pad ACROSS both, then re-split
+              const bg = menu.hoverItem === 22 ? "#3465a4" : "#2d2d2d";
+              return (
+                <Text>
+                  <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
+                  <Text backgroundColor={bg} color={boxColor}>{padded.slice(0, box.length)}</Text>
+                  <Text backgroundColor={bg} color={noteColor}>{padded.slice(box.length)}</Text>
+                  <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
+                </Text>
+              );
+            })()}
             <Text>
               <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
               <Text

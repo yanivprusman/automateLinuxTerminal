@@ -99,6 +99,35 @@ export const REPLAY_LABEL = "replay last caption";
 export const captionsLabel = () => ` ▤ ${CAPTIONS_LABEL}`;
 export const replayLabel = () => ` ↻ ${REPLAY_LABEL}`;
 
+/** The mute row, in the two pieces it is COLOURED in.
+ *
+ *  `box` is this session's own flag -- the checkbox and its label -- and `note` is the
+ *  disclosure that every session is muted by somebody else's switch (the phone's "Mute
+ *  all"), which nothing on this menu can write or clear.
+ *
+ *  They are separate because they were once one string in one colour, and a global mute
+ *  therefore painted the CHECKBOX red as well: the row was red with the box ticked, red
+ *  with it clear, red on every click, so the one control on it looked dead. Red still means
+ *  "you will hear nothing", which is true under either flag -- but which flag is saying so
+ *  has to stay visible, or the toggle answers to a state it does not own. */
+export const muteLabelParts = (muted: boolean, mutedAll: boolean, msg: string): [string, string] =>
+  msg ? [` ${msg}`, ""]
+      : [`${muted ? " ☑" : " ☐"} mute voice`, mutedAll ? " · all muted" : ""];
+
+/** The colour of each of those two pieces: red means "you will hear nothing", and each half
+ *  answers for the flag it draws. Split out from the overlay so a test can pin it without
+ *  rendering -- Ink writes no escapes to a non-tty, so the frame the row tests read is
+ *  colourless and this is invisible there.
+ *
+ *  The failure it guards: with `mutedAll` colouring the box too, a global mute made the row
+ *  red whether the box was ticked or clear. Clicking it changed the glyph and nothing else,
+ *  in a menu where red IS the feedback -- so the toggle read as broken, and the actual
+ *  reason for the silence (a switch on another surface) was the one thing the row was
+ *  trying to say. */
+export const MUTE_RED = "#cc0000", MUTE_GREY = "#888888";
+export const muteRowColors = (muted: boolean, mutedAll: boolean, msg: string): [string, string] =>
+  [msg || muted ? MUTE_RED : MUTE_GREY, !msg && mutedAll ? MUTE_RED : MUTE_GREY];
+
 /** What the launch row says: the thing it starts, and the flag it starts it with.
  *
  *  The flag is on the row rather than folded into a friendly verb. `cl` on its own is what
