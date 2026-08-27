@@ -2,7 +2,7 @@ import React from "react";
 import { Box, Text } from "ink";
 import type { ContextMenuState, SessionHistoryEntry } from "./types.js";
 import { APP_VERSION } from "./session.js";
-import { SESSION_MENU_INNER, sessionMenuPad, sessionMenuBorder, muteLabelParts, muteRowColors, formatElapsed, TOPIC_VIEW_WIDTH, TOPIC_PIN_CELLS, SESSION_ID_LABEL, SESSION_CWD_LABEL, SESSION_COPY_SHORT_LABEL, sessionResumeHead, marqueeWindow, captionsLabel, replayLabel, launchLabel, exitLabel } from "./menu.js";
+import { SESSION_MENU_INNER, sessionMenuPad, sessionMenuBorder, muteLabelParts, muteRowColors, formatElapsed, TOPIC_VIEW_WIDTH, TOPIC_PIN_CELLS, SESSION_ID_LABEL, SESSION_CWD_LABEL, SESSION_COPY_SHORT_LABEL, sessionResumeHead, marqueeWindow, captionsLabel, replayLabel, launchLabel, exitLabel, sendLabel } from "./menu.js";
 import { editView } from "./topicEdit.js";
 import { useMarqueeTick } from "./marquee.js";
 
@@ -203,6 +203,26 @@ export function ContextMenuOverlay({ menu }: { menu: ContextMenuState }) {
             sessions and the app; above it there is one thing, and it now ends somewhere
             visible instead of running into the next checkbox. */}
         <Text backgroundColor="#2d2d2d" color="#888888">{`├${sessionMenuBorder}┤`}</Text>
+        {/* A message INTO the claude running here: the dashboard-android "Send to session"
+            popup, opened from this row (SendDialogOverlay). Its own segment, directly under
+            the topic and above the voice rows: after naming the session it is what a menu
+            about the session is most opened for, and everything below it only listens.
+            Drawn only while a claude is running in this tab -- the one thing it can
+            deliver to -- so its absence says "no claude here", and the row that starts
+            one is a few rows down. White, the one plain-action colour this menu had left:
+            it begins nothing (green), ends nothing (amber) and is not the voice (blue). */}
+        {menu.sendRowOff >= 0 && (
+          <>
+            <Text>
+              <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
+              <Text backgroundColor={menu.hoverItem === 25 ? "#3465a4" : "#2d2d2d"} color="#ffffff">
+                {sessionMenuPad(sendLabel())}
+              </Text>
+              <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
+            </Text>
+            <Text backgroundColor="#2d2d2d" color="#888888">{`├${sessionMenuBorder}┤`}</Text>
+          </>
+        )}
         {/* The voice segment: silence this tab's session, hear the last thing it said
             again, and read everything it has said aloud (the Claude Voice history window,
             narrowed to it). One row each, not one per session block — a tab hosts one live

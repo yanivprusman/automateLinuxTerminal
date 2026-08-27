@@ -11,9 +11,13 @@ import type { Span, Line, Selection, ContextMenuState, SessionHistoryEntry } fro
 import { SESSION_ID, LAUNCH_DIR, SCRIPT_LOG_FILE, publishSessionMetadata, writeTopic, writePidTopic, propagateTopicToDashboard, fetchStoredTopic, readStoredTopic, cleanupMetadata, notifySessionEnded, detectClaudeSession, noteLiveSessionId, currentSessionId, isPidAlive, claimHostWindow, publishWindowClaim, readBookmarkedIds, setBookmarked } from "./session.js";
 import { EMPTY_SPAN, spansEqual, normalizeSelection, readBufferRow, readBuffer } from "./buffer.js";
 import { SESSION_MENU_INNER, formatStopwatch, computeMenuLayout, sessionRowAt, topicRowItem, topicBarWidth, marqueeWindow } from "./menu.js";
-import { topicKeyAt, applyTopicAction, insertTopicText } from "./topicEdit.js";
+import { topicKeyAt, applyTopicAction, insertTopicText, insertFieldText } from "./topicEdit.js";
 import { useMarqueeTick } from "./marquee.js";
 import { ContextMenuOverlay } from "./ContextMenuOverlay.js";
+import { SendDialogOverlay } from "./SendDialogOverlay.js";
+import { SendFlow, openTyping, computeSendLayout, sendHitTest, SEND_ITEM, SEND_DIALOG_INNER, deliveryRefusal, SUBMIT_DELAY_MS, MESSAGE_MAX_CHARS } from "./sendToSession.js";
+import type { SendDialogState, SendIo } from "./sendToSession.js";
+import { startRecording, transcribeRecording, fixSpelling } from "./dictation.js";
 import { clipboardWrite, clipboardRead } from "./clipboard.js";
 import { resumeKeystrokes, shellState } from "./resume.js";
 import { LAUNCH_KEYS, launchRefusal } from "./launch.js";
@@ -103,6 +107,12 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
   const contentCache = useRef<Line[]>([]);
   const [ctxMenu, setCtxMenu] = useState<ContextMenuState | null>(null);
   const ctxMenuRef = useRef<ContextMenuState | null>(null);
+  // The "send to session" dialog, when open. It replaces the menu it was opened from and
+  // owns every byte of input until it closes (processInput). The flow object holds the
+  // recording and the effects; the state is what the overlay draws and the hit-test reads.
+  const [sendDialog, setSendDialog] = useState<SendDialogState | null>(null);
+  const sendRef = useRef<SendDialogState | null>(null);
+  const sendFlowRef = useRef<SendFlow | null>(null);
   const stopwatchRef = useRef({ running: false, startMs: 0, accumulatedMs: 0 });
   const topicRef = useRef('');
   const showTopicBarRef = useRef(true);
@@ -452,7 +462,7 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
       // so handing it over on open costs the other rows nothing (they are still clicks) and
       // costs a stray open nothing either: an untouched field is dismissed by exactly what
       // used to dismiss the menu (see cancelTopicEditOrClose and topicRowItem).
-      ctxMenuRef.current = { kind: 'automateLinuxTerminalMenu', row: r, col: c, hasSelection: false, hoverItem: -1, sessions: [...history], stopwatchDisplay: formatStopwatch(swMs), stopwatchAction: sw.running ? 'stop' : 'start', stopwatchRowOff: layout.stopwatchRow, topic: topicRef.current, editingTopic: true, editBuffer: topicRef.current, editCursor: topicRef.current.length, topicRowOff: layout.topicRow, sessionsRowOff: layout.sessionsRow, helpRowOff: layout.helpRow, infoOpen: false, showTopicBar: showTopicBarRef.current, copiedSessionIdx: -1, currentSessionId: voiceSessionId, captionsRowOff: layout.captionsRow, replayRowOff: layout.replayRow, captionsMsg: '', replayMsg: '', bookmarkIdx: -1, bookmarkMsg: '', resumeIdx: -1, resumeMsg: '', voiceMuted: voiceSessionId ? isVoiceMuted(voiceSessionId) : false, voiceMutedAll: isVoiceMutedGlobally(), muteRowOff: layout.muteRow, muteMsg: '', launchRowOff: layout.launchRow, launchMsg: '', exitRowOff: layout.exitRow, exitMsg: '', exitFailed: false };
+      ctxMenuRef.current = { kind: 'automateLinuxTerminalMenu', row: r, col: c, hasSelection: false, hoverItem: -1, sessions: [...history], stopwatchDisplay: formatStopwatch(swMs), stopwatchAction: sw.running ? 'stop' : 'start', stopwatchRowOff: layout.stopwatchRow, topic: topicRef.current, editingTopic: true, editBuffer: topicRef.current, editCursor: topicRef.current.length, topicRowOff: layout.topicRow, sessionsRowOff: layout.sessionsRow, helpRowOff: layout.helpRow, infoOpen: false, showTopicBar: showTopicBarRef.current, copiedSessionIdx: -1, currentSessionId: voiceSessionId, sendRowOff: layout.sendRow, captionsRowOff: layout.captionsRow, replayRowOff: layout.replayRow, captionsMsg: '', replayMsg: '', bookmarkIdx: -1, bookmarkMsg: '', resumeIdx: -1, resumeMsg: '', voiceMuted: voiceSessionId ? isVoiceMuted(voiceSessionId) : false, voiceMutedAll: isVoiceMutedGlobally(), muteRowOff: layout.muteRow, muteMsg: '', launchRowOff: layout.launchRow, launchMsg: '', exitRowOff: layout.exitRow, exitMsg: '', exitFailed: false };
       if (sw.running) {
         if (swTimerRef.current) clearInterval(swTimerRef.current);
         swTimerRef.current = setInterval(() => {
@@ -478,7 +488,7 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
         const s = normalizeSelection(selection.current!);
         return !(s.startRow === s.endRow && s.startCol === s.endCol);
       })();
-      ctxMenuRef.current = { kind: 'clipboard', row: r, col: c, hasSelection: hasSel, hoverItem: -1, sessions: [], stopwatchDisplay: null, stopwatchAction: null, stopwatchRowOff: 0, topic: '', editingTopic: false, editBuffer: '', editCursor: 0, topicRowOff: 0, sessionsRowOff: -1, helpRowOff: -1, infoOpen: false, showTopicBar: false, copiedSessionIdx: -1, currentSessionId: null, captionsRowOff: -1, replayRowOff: -1, captionsMsg: '', replayMsg: '', bookmarkIdx: -1, bookmarkMsg: '', resumeIdx: -1, resumeMsg: '', voiceMuted: false, voiceMutedAll: false, muteRowOff: -1, muteMsg: '', launchRowOff: -1, launchMsg: '', exitRowOff: -1, exitMsg: '', exitFailed: false };
+      ctxMenuRef.current = { kind: 'clipboard', row: r, col: c, hasSelection: hasSel, hoverItem: -1, sessions: [], stopwatchDisplay: null, stopwatchAction: null, stopwatchRowOff: 0, topic: '', editingTopic: false, editBuffer: '', editCursor: 0, topicRowOff: 0, sessionsRowOff: -1, helpRowOff: -1, infoOpen: false, showTopicBar: false, copiedSessionIdx: -1, currentSessionId: null, sendRowOff: -1, captionsRowOff: -1, replayRowOff: -1, captionsMsg: '', replayMsg: '', bookmarkIdx: -1, bookmarkMsg: '', resumeIdx: -1, resumeMsg: '', voiceMuted: false, voiceMutedAll: false, muteRowOff: -1, muteMsg: '', launchRowOff: -1, launchMsg: '', exitRowOff: -1, exitMsg: '', exitFailed: false };
       setCtxMenu({ ...ctxMenuRef.current });
       process.stdout.write('\x1b[?1003h');
     };
@@ -489,6 +499,189 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
       setCtxMenu(null);
       if (swTimerRef.current) { clearInterval(swTimerRef.current); swTimerRef.current = null; }
       process.stdout.write('\x1b[?1003l');
+    };
+
+    // ── The "send to session" dialog ───────────────────────────────────────────────────
+    // The dashboard-android popup, opened from the menu's send row for the claude running
+    // in this tab. What the flow does and says lives in sendToSession.ts; what the mic,
+    // whisper and the spelling fixer are lives in dictation.ts; this is the wiring: where
+    // it is drawn, what the bytes mean while it is open, and how the message reaches the
+    // pty -- which is THIS tab's, so nothing here goes through the dashboard's send-keys.
+
+    /** Keep the dialog on screen. Its height changes with its phase and its field, so
+     *  this is applied to every state, not once at open. */
+    const placeSend = (s: SendDialogState): SendDialogState => {
+      const d = dimsRef.current;
+      const h = computeSendLayout(s).height;
+      return {
+        ...s,
+        row: Math.max(0, Math.min(s.row, d.rows - h)),
+        col: Math.max(0, Math.min(s.col, d.cols - (SEND_DIALOG_INNER + 2))),
+      };
+    };
+
+    const openSendDialog = (sessionId: string, topic: string, row: number, col: number) => {
+      closeMenu();
+      const io: SendIo = {
+        record: startRecording,
+        transcribe: transcribeRecording,
+        fixSpelling,
+        // Typed into this tab's own pty, as the resume, launch and exit rows type -- and
+        // refused, with the reason on the dialog, when what is reading the pty is not a
+        // claude (deliveryRefusal). Enter goes as a SEPARATE write a beat later, for the
+        // reason on SUBMIT_DELAY_MS.
+        deliver: async (text, submit) => {
+          const refusal = deliveryRefusal(shellState(shell.pid), () => !!detectClaudeSession(shell.pid));
+          if (refusal) throw new Error(refusal);
+          // Everything typing does, because this IS typing: come back from a scrolled-back
+          // screen and drop a selection whose highlight would sit over what replaces it.
+          if (term.buffer.active.viewportY !== term.buffer.active.baseY) term.scrollToBottom();
+          selection.current = null;
+          contentDirty.current = true;
+          needsRefresh.current = true;
+          shell.write(text);
+          if (!submit) return;
+          await new Promise(r => setTimeout(r, SUBMIT_DELAY_MS));
+          shell.write('\r');
+        },
+      };
+      const flow = new SendFlow(io, placeSend(openTyping(sessionId, topic, row, col)), (s) => {
+        if (s) {
+          const placed = placeSend(s);
+          sendRef.current = placed;
+          setSendDialog(placed);
+        } else {
+          sendRef.current = null;
+          sendFlowRef.current = null;
+          setSendDialog(null);
+          process.stdout.write('\x1b[?1003l');
+        }
+      });
+      sendFlowRef.current = flow;
+      sendRef.current = flow.state;
+      setSendDialog(flow.state);
+      process.stdout.write('\x1b[?1003h');
+    };
+
+    /** A click on one of the dialog's controls. */
+    const sendAct = (flow: SendFlow, hit: { item: number; cursor?: number }) => {
+      const s = flow.state;
+      switch (hit.item) {
+        case SEND_ITEM.field: flow.edit({ buffer: s.transcript, cursor: hit.cursor ?? s.cursor }); break;
+        case SEND_ITEM.speak: flow.speak(); break;
+        case SEND_ITEM.fix: flow.fix(); break;
+        case SEND_ITEM.useDropped: flow.useDropped(); break;
+        case SEND_ITEM.undo: flow.undo(); break;
+        case SEND_ITEM.send: flow.send(true); break;
+        case SEND_ITEM.insert: flow.send(false); break;
+        case SEND_ITEM.done: flow.done(); break;
+        case SEND_ITEM.skip: flow.skip(); break;
+        case SEND_ITEM.cancel: case SEND_ITEM.close: flow.cancel(); break;
+      }
+    };
+
+    /** Escape: out of the recording with the words kept (the phone's Type/Back), out of
+     *  the dialog otherwise. Never out of a send in flight -- cancel() refuses that. */
+    const sendEscape = () => {
+      const flow = sendFlowRef.current;
+      if (!flow) return;
+      if (flow.state.phase === 'recording') flow.skip(); else flow.cancel();
+    };
+
+    /** Every byte while the dialog is open. The menu's input loop, for a surface with a
+     *  bigger field and a few more keys: the field's keys are the topic field's
+     *  (topicKeyAt), Enter sends, Alt+Enter inserts, and the write-row actions have the
+     *  control keys their labels show. A mouse report is hit-tested against the layout the
+     *  overlay drew from, and a click outside the dialog dismisses it, as a tap outside the
+     *  phone's popup does. */
+    const handleSendInput = () => {
+      const flow = sendFlowRef.current!;
+      let pos = 0;
+      while (pos < inBuf.length && sendRef.current) {
+        const s = sendRef.current;
+        const rest = inBuf.slice(pos);
+        if (rest[0] === '\x1b') {
+          const sgr = rest.match(/^\x1b\[<(\d+);(\d+);(\d+)([Mm])/);
+          if (sgr) {
+            const button = parseInt(sgr[1]);
+            const mCol = parseInt(sgr[2]) - 1;
+            const mRow = parseInt(sgr[3]) - 1;
+            const isPress = sgr[4] === 'M';
+            const layout = computeSendLayout(s);
+            const rowOff = mRow - s.row, colOff = mCol - s.col;
+            const inside = rowOff >= 0 && rowOff < layout.height && colOff >= 0 && colOff <= SEND_DIALOG_INNER + 1;
+            const hit = inside ? sendHitTest(s, layout, rowOff, colOff) : null;
+            if (button === 35 || button === 32 || button === 34) {
+              flow.hover(hit ? hit.item : -1);
+            } else if (button === 0 && isPress) {
+              if (!inside) flow.cancel();
+              else if (hit) sendAct(flow, hit);
+            }
+            pos += sgr[0].length; continue;
+          }
+          // Alt+Enter: insert -- type the words and stop, the phone's second button.
+          if (rest.startsWith('\x1b\r') || rest.startsWith('\x1b\n')) {
+            if (s.phase === 'confirm') flow.send(false);
+            pos += 2; continue;
+          }
+          if (s.phase === 'confirm') {
+            const key = topicKeyAt(rest);
+            if (key) {
+              flow.edit(applyTopicAction({ buffer: s.transcript, cursor: s.cursor }, key.action));
+              pos += key.consumed; continue;
+            }
+          }
+          // A sequence still arriving is not a key yet (the menu's rule, same regex): a
+          // bare Escape is decided 50 ms later, when nothing has followed it.
+          if (/^\x1b(\[[\d;<]*|O)?$/.test(rest)) {
+            inBuf = rest;
+            flushTimer = setTimeout(() => { inBuf = ''; sendEscape(); }, 50);
+            return;
+          }
+          // Any other complete sequence (a function key, a modifier the field does not
+          // claim) means nothing here and is skipped, not typed.
+          const esc = rest.match(/^\x1b(\[[\x20-\x3f]*[\x40-\x7e]|O[\x40-\x7e]|[^\[O])/);
+          pos += esc ? esc[0].length : 1; continue;
+        }
+        const ch = rest[0];
+        if (ch === '\r' || ch === '\n') {
+          // A lone Enter is the verb of the step. Arriving in one read WITH printable
+          // characters it is a line break inside a paste, and in a one-line message box a
+          // line break is a space (the printable branch below takes it) -- not a send of
+          // half a thought.
+          const pasted = s.phase === 'confirm' && /[^\x00-\x1f\x7f]/.test(inBuf);
+          if (!pasted) {
+            if (s.phase === 'confirm') flow.send(true);
+            else if (s.phase === 'recording') flow.done();
+            else if (s.phase === 'failed') flow.cancel();
+            pos++; continue;
+          }
+        }
+        if (ch === '\x03') { flow.cancel(); pos++; continue; }            // Ctrl+C
+        if (s.phase === 'confirm') {
+          if (ch === '\x14') { flow.speak(); pos++; continue; }          // Ctrl+T: talk
+          if (ch === '\x18') { flow.fix(); pos++; continue; }            // Ctrl+X: fix typos
+          if (ch === '\x1a') { flow.undo(); pos++; continue; }           // Ctrl+Z: undo the fix
+          if (ch === '\x12') { flow.useDropped(); pos++; continue; }     // Ctrl+R: use what I said
+          const key = topicKeyAt(ch);
+          if (key) {
+            flow.edit(applyTopicAction({ buffer: s.transcript, cursor: s.cursor }, key.action));
+            pos += key.consumed; continue;
+          }
+          // A run of printable characters -- one keystroke, or a paste -- goes in at the
+          // caret in one step. Line breaks inside the run become spaces: the message is one
+          // line, because the prompt it is typed into submits on a newline.
+          let end = pos;
+          while (end < inBuf.length && (inBuf.charCodeAt(end) >= 32 || inBuf[end] === '\r' || inBuf[end] === '\n') && inBuf[end] !== '\x7f') end++;
+          if (end > pos) {
+            const run = inBuf.slice(pos, end).replace(/\r\n|\r|\n/g, ' ');
+            flow.edit(insertFieldText({ buffer: s.transcript, cursor: s.cursor }, run, MESSAGE_MAX_CHARS));
+            pos = end; continue;
+          }
+        }
+        pos++;   // a control key with no meaning on this step
+      }
+      inBuf = '';
     };
 
     /** What Escape — and every other key the topic field does not take — means, now that
@@ -518,9 +711,23 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
     const processInput = () => {
       if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
 
+      // The dialog is modal: while it is open nothing reaches the menu or the shell.
+      if (sendRef.current) { handleSendInput(); return; }
+
       if (ctxMenuRef.current) {
         let pos = 0;
         while (pos < inBuf.length) {
+          if (!ctxMenuRef.current) {
+            // The menu closed part-way through this read -- a click that dismissed it, or
+            // one that opened the send dialog in its place -- and what follows belongs to
+            // whatever is open NOW: the dialog, or nothing. Never to the menu that is gone
+            // (the row arithmetic below would dereference it: a press and its release
+            // arriving in one read used to crash the tab here), and never to the shell as
+            // keystrokes, since what follows a press is its release.
+            inBuf = inBuf.slice(pos);
+            if (sendRef.current) handleSendInput(); else inBuf = '';
+            return;
+          }
           if (inBuf[pos] === '\x1b') {
             const rest = inBuf.slice(pos);
             const sgrMatch = rest.match(/^\x1b\[<(\d+);(\d+);(\d+)([Mm])/);
@@ -548,6 +755,9 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
                 else if (m.muteRowOff >= 0 && rowOff === m.muteRowOff) itemIdx = 22;
                 else if (m.captionsRowOff >= 0 && rowOff === m.captionsRowOff) itemIdx = 23;
                 else if (m.replayRowOff >= 0 && rowOff === m.replayRowOff) itemIdx = 24;
+                // 25 = a message into the claude running here (opens the send dialog).
+                // Its own segment above the voice rows, on the same session they act on.
+                else if (m.sendRowOff >= 0 && rowOff === m.sendRowOff) itemIdx = 25;
                 // 40 = end the claude running here, then the terminal itself. 41 = start one
                 // here. Adjacent numbers because they are the tab's two lifecycle rows, but
                 // NOT adjacent rows -- a rule sits between them, see computeMenuLayout.
@@ -577,6 +787,14 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
                   setCtxMenu(updated);
                 }
               } else if (button === 0 && isPress) {
+                // Open the send dialog for this tab's session, in the menu's place. The
+                // session is the one the voice rows act on (currentSessionId), never
+                // re-derived from the list; the row is only drawn while one is running.
+                if (m.kind === 'automateLinuxTerminalMenu' && onItem && itemIdx === 25) {
+                  if (m.currentSessionId) openSendDialog(m.currentSessionId, m.topic, m.row, m.col);
+                  else closeMenu();
+                  pos += sgrMatch[0].length; continue;
+                }
                 if (m.kind === 'automateLinuxTerminalMenu' && onItem && itemIdx === 24) {
                   const sessionId = m.currentSessionId;
                   if (!sessionId) {
@@ -888,7 +1106,10 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
                     ...m, infoOpen,
                     row: Math.max(0, Math.min(m.row, d.rows - layout.height)),
                     topicRowOff: layout.topicRow,
+                    sendRowOff: layout.sendRow,
                     muteRowOff: layout.muteRow,
+                    captionsRowOff: layout.captionsRow,
+                    replayRowOff: layout.replayRow,
                     sessionsRowOff: layout.sessionsRow,
                     stopwatchRowOff: layout.stopwatchRow,
                     launchRowOff: layout.launchRow,
@@ -1188,6 +1409,8 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
       if (swTimerRef.current) clearInterval(swTimerRef.current);
       if (scriptLogWatchId) clearInterval(scriptLogWatchId);
       if (flushTimer) clearTimeout(flushTimer);
+      // A microphone left open outlives nothing: the flow stops and discards it.
+      sendFlowRef.current?.cancel();
       stdin?.off("data", handleInput);
       shell.kill();
       term.dispose();
@@ -1202,6 +1425,7 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
         <TerminalLine key={i} spans={spans} />
       ))}
       {ctxMenu && <ContextMenuOverlay menu={ctxMenu} />}
+      {sendDialog && <SendDialogOverlay state={sendDialog} />}
       {showTopicBar && topicRef.current && <TopicSign text={topicRef.current} cols={cols} />}
     </Box>
   );

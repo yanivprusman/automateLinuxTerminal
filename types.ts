@@ -66,6 +66,10 @@ export interface ContextMenuState {
   // session: the live one, or the last one the tab hosted (menu.ts::currentSessionId).
   // Null when it has never hosted one, and then those rows are not drawn.
   currentSessionId: string | null;
+  // The send row: opens the "send to session" dialog for THIS TAB'S claude (the same
+  // currentSessionId the voice segment acts on). -1 when no claude is running here, and
+  // then the row is not drawn -- there is nothing it could deliver to.
+  sendRowOff: number;
   captionsRowOff: number;
   replayRowOff: number;
   // What the captions/replay rows are reporting, if anything ("opening…", "replaying…",

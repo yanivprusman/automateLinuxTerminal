@@ -171,9 +171,17 @@ export function applyTopicAction(field: TopicField, action: TopicAction): TopicF
  *  than by refusing the keystroke, so a paste that would overflow puts in what fits instead
  *  of nothing. */
 export function insertTopicText(field: TopicField, text: string): TopicField {
+  return insertFieldText(field, text, TOPIC_MAX_CHARS);
+}
+
+/** The same insertion with the bound as a parameter -- the topic's cap is what a topic
+ *  sanely is, and the "send to session" message box (sendToSession.ts) is the same field
+ *  with a different idea of sane. One function, so the two boxes cannot drift on where a
+ *  character goes or what an overflowing paste does. */
+export function insertFieldText(field: TopicField, text: string, max: number): TopicField {
   const buf = field.buffer;
   const at = Math.max(0, Math.min(field.cursor, buf.length));
-  const add = text.slice(0, Math.max(0, TOPIC_MAX_CHARS - buf.length));
+  const add = text.slice(0, Math.max(0, max - buf.length));
   if (!add) return { buffer: buf, cursor: at };
   return { buffer: buf.slice(0, at) + add + buf.slice(at), cursor: at + add.length };
 }

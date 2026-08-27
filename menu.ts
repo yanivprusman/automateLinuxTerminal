@@ -144,6 +144,18 @@ export const muteRowColors = (muted: boolean, mutedAll: boolean, msg: string): [
 export const LAUNCH_LABEL = "start claude · skip permissions";
 export const launchLabel = () => ` + ${LAUNCH_LABEL}`;
 
+/** What the send row says: it opens the dialog that puts a message into this tab's claude.
+ *
+ *  The same words as the title of the phone's popup ("Send to session"), because it IS that
+ *  popup -- the dashboard-android one, on this surface -- and a row and a dialog that name
+ *  the same thing differently would read as two features.
+ *
+ *  `✉` is its mark: one cell, and the sign for a message on its way somewhere, which is the
+ *  whole of what the row does. Not `▸` (reserved for the messages rows report in place) and
+ *  not `+` (the launch row's: one more of something). */
+export const SEND_LABEL = "send to session";
+export const sendLabel = () => ` ✉ ${SEND_LABEL}`;
+
 /** What the exit row says, and therefore what it does. Two labels because it is two
  *  different amounts of work: with a claude running here it is Ctrl+D, Ctrl+D, `exit` --
  *  the three presses this row exists to stop anyone having to remember -- and with none it
@@ -273,12 +285,27 @@ export function formatStopwatch(ms: number): string {
  *  the furthest thing from where the click that opened it landed, which is where an action
  *  that ends the session belongs; and the "?" unfolds its info line DOWNWARDS, so anything
  *  below the "?" would slide out from under the pointer the moment someone opened it. A
- *  row that ends the tab is the last row in the menu that may move. */
+ *  row that ends the tab is the last row in the menu that may move.
+ *
+ *  The send row is a segment of its own DIRECTLY UNDER THE TOPIC, and the first action row
+ *  in the menu. Everything the voice segment does is about hearing the session; this is the
+ *  one row that speaks TO it, and after naming the session it is the thing a menu about the
+ *  session is most opened for -- so it sits one row from the pointer, above the rows that
+ *  only listen. It is drawn only while a claude is RUNNING here (`alive`), because that is
+ *  the only thing it can deliver to: a session that has ended cannot take a message, and a
+ *  row that opened a dialog whose Send could only ever refuse would be a dead end dressed
+ *  as a feature. Its absence says "no claude here", and the row that starts one is a few
+ *  rows down. */
 export function computeMenuLayout(sessions: SessionHistoryEntry[], hasStopwatch: boolean, infoOpen: boolean) {
   let row = 0;
   row++;                         // top border
   const topicRow = row; row++;   // topic + its pin box (one row, split by column)
   row++;                         // the rule under the topic field
+  let sendRow = -1;
+  if (sessions.some(s => s.alive)) {
+    sendRow = row; row++;        // a message into the claude running here
+    row++;                       // rule closing the send segment off
+  }
   let muteRow = -1, captionsRow = -1, replayRow = -1;
   if (sessions.length > 0) {
     muteRow = row; row++;        // silence this tab's session
@@ -308,7 +335,7 @@ export function computeMenuLayout(sessions: SessionHistoryEntry[], hasStopwatch:
   const helpRow = row; row++;    // the "?"
   if (infoOpen) row++;           // the info line it opens
   row++;                         // bottom border
-  return { helpRow, launchRow, exitRow, topicRow, muteRow, captionsRow, replayRow, sessionsRow, stopwatchRow, height: row };
+  return { helpRow, launchRow, exitRow, topicRow, sendRow, muteRow, captionsRow, replayRow, sessionsRow, stopwatchRow, height: row };
 }
 
 export type SessionRowAction = 'copy' | 'bookmark' | 'resume';

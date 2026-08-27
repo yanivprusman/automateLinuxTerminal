@@ -16,7 +16,7 @@ import { render, Box } from "ink";
 import { PassThrough } from "stream";
 import stringWidth from "string-width";
 import { ContextMenuOverlay } from "../ContextMenuOverlay.js";
-import { computeMenuLayout, sessionRowAt, topicRowItem, TOPIC_PIN_CELLS, SESSION_MENU_INNER, SESSION_ID_LABEL, SESSION_CWD_LABEL, SESSION_RESUME_CELLS, SESSION_RESUME_LABEL, SESSION_COPY_SHORT_LABEL, sessionResumeHead, CAPTIONS_LABEL, REPLAY_LABEL, captionsLabel, replayLabel, LAUNCH_LABEL, launchLabel, EXIT_LABEL_WITH_CLAUDE, EXIT_LABEL_BARE, exitLabel } from "../menu.js";
+import { computeMenuLayout, sessionRowAt, topicRowItem, TOPIC_PIN_CELLS, SESSION_MENU_INNER, SESSION_ID_LABEL, SESSION_CWD_LABEL, SESSION_RESUME_CELLS, SESSION_RESUME_LABEL, SESSION_COPY_SHORT_LABEL, sessionResumeHead, CAPTIONS_LABEL, REPLAY_LABEL, captionsLabel, replayLabel, LAUNCH_LABEL, launchLabel, EXIT_LABEL_WITH_CLAUDE, EXIT_LABEL_BARE, exitLabel, SEND_LABEL, sendLabel } from "../menu.js";
 import type { ContextMenuState, SessionHistoryEntry } from "../types.js";
 
 // Mixed on purpose: a ticked and an unticked bookmark draw different text, and both have
@@ -43,7 +43,7 @@ async function drawMenu(infoOpen: boolean, voiceMutedAll = false, sess: SessionH
     stopwatchRowOff: layout.stopwatchRow, topic: "voice", editingTopic: false, editBuffer: "", editCursor: 0,
     topicRowOff: layout.topicRow, sessionsRowOff: layout.sessionsRow, helpRowOff: layout.helpRow, infoOpen,
     showTopicBar: true, copiedSessionIdx: -1,
-    currentSessionId: sessions[0].sessionId, captionsRowOff: layout.captionsRow, replayRowOff: layout.replayRow,
+    currentSessionId: sessions[0].sessionId, sendRowOff: layout.sendRow, captionsRowOff: layout.captionsRow, replayRowOff: layout.replayRow,
     captionsMsg: "", replayMsg: "", bookmarkIdx: -1, bookmarkMsg: "", resumeIdx: -1, resumeMsg: "",
     voiceMuted: true, voiceMutedAll, muteRowOff: layout.muteRow, muteMsg: "",
     launchRowOff: layout.launchRow, launchMsg: "",
@@ -396,6 +396,39 @@ for (const k of ["topicRow", "muteRow", "sessionsRow", "stopwatchRow", "launchRo
   // it there would leave the menu offering only ways to end a thing that never started.
   if (none.launchRow < 0) fail("a tab with no sessions is not offered a claude to start");
   if (!(none.launchRow < none.exitRow)) fail(`with no sessions the launch row ${none.launchRow} is not above the exit at ${none.exitRow}`);
+}
+
+// THE SEND ROW — the door to the "send to session" dialog, for the claude RUNNING here.
+//
+// Drawn only while one is: it is the one thing the dialog can deliver to, and a row that
+// opened a dialog whose Send could only refuse would be a dead end dressed as a feature. Its
+// own segment directly under the topic (the first action row, above everything that only
+// listens), a rule on each side, owned by no session block -- a click that landed on a
+// session's rows would copy an id or tick a box instead of opening the dialog.
+{
+  const { layout, lines } = await drawMenu(false);
+  const sendLines = lines.map((l, i) => [l, i] as const).filter(([l]) => l.includes(SEND_LABEL)).map(([, i]) => i);
+  console.log(`send row: ${layout.sendRow} (drawn at ${sendLines.join(",")})`);
+  if (sendLines.length !== 1) fail(`expected exactly one send row, drew ${sendLines.length}`);
+  else if (sendLines[0] !== layout.sendRow) fail(`send drawn at ${sendLines[0]} but the layout says ${layout.sendRow}`);
+  if (sendLabel().length > SESSION_MENU_INNER) fail("the send label does not fit the menu");
+  if (sessionRowAt(layout.sendRow, sessions, layout.sessionsRow, SESSION_MENU_INNER)) fail("the send row also maps to a session");
+  if (layout.sendRow !== layout.topicRow + 2) fail(`the send row ${layout.sendRow} is not directly under the topic's rule (${layout.topicRow + 2})`);
+  if (!(lines[layout.sendRow - 1] ?? "").startsWith("├")) fail(`no rule above the send row: "${(lines[layout.sendRow - 1] ?? "").trim()}"`);
+  if (!(lines[layout.sendRow + 1] ?? "").startsWith("├")) fail(`no rule below the send row: "${(lines[layout.sendRow + 1] ?? "").trim()}"`);
+  if (!(layout.sendRow < layout.muteRow)) fail(`the send row ${layout.sendRow} is not above the voice segment at ${layout.muteRow}`);
+  // It wears its own mark: `▸` is the messages', `+` the launch row's.
+  if (/[▸+]/.test(lines[layout.sendRow] ?? "")) fail(`the send row borrows another row's mark: "${(lines[layout.sendRow] ?? "").trim()}"`);
+
+  // No claude running here → no row, and nothing under it shifts wrongly.
+  const dead = sessions.map(s => ({ ...s, alive: false }));
+  const drawnDead = await drawMenu(false, false, dead);
+  if (drawnDead.layout.sendRow !== -1) fail(`with no live session the send row is still laid out at ${drawnDead.layout.sendRow}`);
+  if (drawnDead.lines.some(l => l.includes(SEND_LABEL))) fail("with no live session the send row is still drawn");
+  if (drawnDead.lines.length !== drawnDead.layout.height) fail(`dead-session menu draws ${drawnDead.lines.length} rows but the layout reserves ${drawnDead.layout.height}`);
+  if (drawnDead.layout.muteRow !== drawnDead.layout.topicRow + 2) fail("with no send row the voice segment does not move up under the topic");
+  const none = computeMenuLayout([], true, false);
+  if (none.sendRow !== -1) fail(`with no sessions the send row is laid out at ${none.sendRow}`);
 }
 
 // THE ROW STILL SAYS WHAT IT IS FOR WHILE IT IS FOCUSED AND EMPTY.
