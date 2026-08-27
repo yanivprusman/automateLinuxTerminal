@@ -14,10 +14,12 @@
 //   npx tsx tests/testSendToSession.ts
 import {
   SendFlow, openTyping, heard, appending, failedToDictate, skipToType, edited, fixApplied, undoFix,
-  micOpened, deliveryRefusal, wrapField, cursorAtCell, computeSendLayout, sendHitTest, buttonCells,
+  micOpened, deliveryRefusal, wrapField, cursorAtCell, visualRows, caretCell, fieldKeyAt, applyFieldAction,
+  normalizeNewlines, computeSendLayout, sendHitTest, buttonCells,
   writeRowButtons, actionRowButtons, sendTitle, sendHint, sendErrorLine, SEND_ITEM, FIELD_WIDTH,
   FIELD_MIN_ROWS, FIELD_MAX_ROWS, SEND_DIALOG_INNER, MESSAGE_MAX_CHARS,
 } from "../sendToSession.js";
+import type { TopicField } from "../topicEdit.js";
 import type { SendDialogState, SendIo, Recording } from "../sendToSession.js";
 import { SEND_LABEL } from "../menu.js";
 
@@ -101,6 +103,15 @@ eq(writeRowButtons(fresh())[1].enabled, false, "nothing to fix in an empty box")
 eq(actionRowButtons(micOpened(fresh())).find(b => b.item === SEND_ITEM.skip)?.text, "esc type", "skip from an empty box is 'type'");
 eq(actionRowButtons(micOpened(withWords("x"))).find(b => b.item === SEND_ITEM.skip)?.text, "esc back", "skip from a 'say more' is 'back'");
 eq(actionRowButtons({ ...fresh(), phase: "sending" }), [], "no way out mid-flight");
+// Enter is a line break in the phone's box, so it is not the send key here: the two verbs
+// have keys of their own, named on the row, and neither of them is Enter or Alt+Enter
+// (claude's own newline).
+{
+  const texts = actionRowButtons(withWords("x")).map(b => b.text);
+  eq(texts, ["^S send", "^O insert", "esc cancel"], "send and insert are Ctrl keys, not Enter");
+  if (texts.some(t => /↵/.test(t))) fail("a dispatch button claims Enter");
+}
+eq(normalizeNewlines("a\r\nb\rc\nd"), "a\nb\nc\nd", "every kind of line break becomes the byte claude reads as a newline");
 
 // Every button row fits the dialog, in its widest dress.
 {
@@ -134,6 +145,41 @@ console.log("\n# wrap");
   eq(cursorAtCell("hello world", 0, W, 1, 50), 11, "past the end of the text is the end");
   eq(cursorAtCell("hello world", 0, W, 4, 0), 11, "below the text is its end");
   eq(cursorAtCell(long, 4, W, 1, 2), 52, "a click is offset by the rows scrolled off the top");
+
+  // LINE BREAKS -- the phone's box is multi-line, and Enter here is what Enter is there.
+  eq(visualRows("ab\ncd", W), [{ start: 0, end: 2 }, { start: 3, end: 5 }], "a break ends a row; the break itself is on no row");
+  eq(visualRows("ab\n", W), [{ start: 0, end: 2 }, { start: 3, end: 3 }], "a message ending in a break has an empty row after it");
+  eq(visualRows("\n\n", W), [{ start: 0, end: 0 }, { start: 1, end: 1 }, { start: 2, end: 2 }], "empty lines are rows");
+  eq(visualRows("0123456789\nx", W), [{ start: 0, end: 10 }, { start: 10, end: 10 }, { start: 11, end: 12 }], "a full line still gets its caret row before the break");
+  const two = wrapField("ab\ncd", 3, W, 2, 6);
+  eq([two.rows, two.caretRow, two.caretCol], [["ab", "cd"], 1, 0], "the caret after a break is at the head of the next row");
+  const before = wrapField("ab\ncd", 2, W, 2, 6);
+  eq([before.caretRow, before.caretCol], [0, 2], "the caret before a break is at the end of its row");
+  eq(caretCell(visualRows("0123456789\nx", W), "0123456789\nx", 10), { row: 1, col: 0 }, "the caret at the end of a full line sits on its caret row, not the next line");
+  eq(cursorAtCell("ab\ncd", 0, W, 0, 5), 2, "past the end of a line is the end of that line, before its break");
+  eq(cursorAtCell("ab\ncd", 0, W, 1, 1), 4, "a click on the second line is a character of the second line");
+
+  // THE BOX'S OWN KEYS: rows and lines, where the one-row topic field had only ends.
+  const f = (s: string): TopicField => ({ buffer: s.replace("|", ""), cursor: s.indexOf("|") });
+  const show = (x: TopicField) => x.buffer.slice(0, x.cursor) + "|" + x.buffer.slice(x.cursor);
+  const after = (s: string, a: Parameters<typeof applyFieldAction>[1]) => show(applyFieldAction(f(s), a, W));
+  eq(after("abc\nde|f", 'up'), "ab|c\ndef", "up keeps the column");
+  eq(after("abcdef\nx|y", 'up'), "a|bcdef\nxy", "up from a short line lands in the column above");
+  eq(after("abc|def\nxy", 'down'), "abcdef\nxy|", "down onto a shorter line clamps to its end");
+  eq(after("ab|c", 'up'), "ab|c", "up on the first row stays put");
+  eq(after("ab|c", 'down'), "ab|c", "down on the last row stays put");
+  eq(after("0123456789ab|cd", 'up'), "01|23456789abcd", "up walks wrapped rows of one line too");
+  eq(after("abc\nde|f", 'home'), "abc\n|def", "home is the start of the row");
+  eq(after("abc\nde|f", 'end'), "abc\ndef|", "end is the end of the row");
+  eq(after("0123456789ab|cd", 'home'), "0123456789|abcd", "home on a wrapped row is that row's start");
+  eq(after("abc\nde|f\nxyz", 'killToStart'), "abc\n|f\nxyz", "ctrl+u kills to the start of the LINE");
+  eq(after("abc\nde|f\nxyz", 'killToEnd'), "abc\nde|\nxyz", "ctrl+k kills to the end of the LINE, keeping the break");
+  eq(after("abc\nde|f", 'left'), "abc\nd|ef", "the topic field's keys are untouched");
+  eq(after("abc\n|def", 'deleteBack'), "abc|def", "backspace at the head of a line joins it to the one above");
+  eq(fieldKeyAt("\x1b[A")?.action, 'up', "the up arrow is up");
+  eq(fieldKeyAt("\x1bOB")?.action, 'down', "the down arrow in application mode is down");
+  eq(fieldKeyAt("\x1b[1;5A")?.action, 'up', "ctrl+up is up too");
+  eq(fieldKeyAt("\x1b[D")?.action, 'left', "everything else is the topic field's key");
 }
 
 // ── THE HIT-TEST AGREES WITH THE LAYOUT ─────────────────────────────────────────────────
@@ -168,6 +214,9 @@ console.log("\n# hit-test");
   const tallLayout = computeSendLayout(tall);
   eq(tallLayout.fieldRows, 5, "four full rows and the caret's own make five");
   eq(tallLayout.writeRow, tallLayout.fieldRow + 5, "the write row follows the field");
+  eq(computeSendLayout(withWords("a\nb\nc")).fieldRows, 3, "three lines are three rows");
+  const lined = withWords("ab\ncd");
+  eq(sendHitTest(lined, computeSendLayout(lined), computeSendLayout(lined).fieldRow + 1, 3)?.cursor, 4, "a click on the second line lands on it");
   eq(computeSendLayout(withWords("x".repeat(FIELD_WIDTH * 20))).fieldRows, FIELD_MAX_ROWS, "the field never grows past its cap");
   // The other phases.
   eq(computeSendLayout(micOpened(fresh())).height, 6, "recording: border, title, label, hint, action, border");

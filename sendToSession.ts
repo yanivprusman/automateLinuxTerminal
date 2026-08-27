@@ -1,5 +1,6 @@
 import type { ShellState } from "./resume.js";
-import type { TopicField } from "./topicEdit.js";
+import type { TopicField, TopicAction } from "./topicEdit.js";
+import { topicKeyAt, applyTopicAction } from "./topicEdit.js";
 import { SEND_LABEL } from "./menu.js";
 
 // The "send to session" dialog: the dashboard-android popup (TalkSessionDialog, driven by
@@ -492,10 +493,18 @@ export function writeRowButtons(s: SendDialogState): SendButton[] {
 export function actionRowButtons(s: SendDialogState): SendButton[] {
   switch (s.phase) {
     case 'confirm': {
+      // Not Enter. The phone's box is a plain multi-line field where Enter is a line break
+      // and Send is a button; the message can be several lines, and each `\n` in it lands
+      // in claude's prompt as a newline (claude binds the line feed, its Ctrl+J, to
+      // chat:newline) before the Enter that submits. So Enter is a line break HERE too --
+      // a dialog that sent on the key the phone breaks lines on would be the one surface
+      // where a message typed the same way went out half-written -- and the two verbs
+      // have keys of their own, named on the row: S for send, O for the other one.
+      // Alt+Enter is deliberately not the send key either: it is claude's own newline.
       const ready = s.transcript.length > 0;
       return [
-        { item: SEND_ITEM.send, text: '↵ send', enabled: ready },
-        { item: SEND_ITEM.insert, text: '⎇↵ insert', enabled: ready },
+        { item: SEND_ITEM.send, text: '^S send', enabled: ready },
+        { item: SEND_ITEM.insert, text: '^O insert', enabled: ready },
         { item: SEND_ITEM.cancel, text: 'esc cancel', enabled: true },
       ];
     }
@@ -538,6 +547,13 @@ export const FIELD_MAX_ROWS = 6;
  *  sanity bound on a string that is about to be typed into a prompt as keystrokes. */
 export const MESSAGE_MAX_CHARS = 4000;
 
+/** What Enter puts in the box. The phone's field is a plain multi-line one -- Enter is a
+ *  line break there, Send is a button -- and the break reaches claude's prompt as exactly
+ *  this byte, which claude binds to chat:newline (its Ctrl+J). A pasted `\r\n` or `\r`
+ *  becomes the same byte, so a message pasted from anywhere lands with its lines. */
+export const NEWLINE = '\n';
+export const normalizeNewlines = (s: string) => s.replace(/\r\n|\r/g, NEWLINE);
+
 /** Cells between buttons on a row, and the indent every row in this dialog has. */
 const BUTTON_GAP = 3;
 const ROW_INDENT = 1;
@@ -554,35 +570,117 @@ export function buttonCells(buttons: SendButton[]): { item: number; start: numbe
   return out;
 }
 
-/** The message as the box shows it: hard-wrapped at `width`, `visible` rows of it, chosen
- *  so the caret is always on screen. Character-wrapped rather than word-wrapped on purpose
- *  -- the caret's cell is then arithmetic (`cursor` ÷ `width`), and a click in the box maps
- *  back to a character the same way, with nothing for the two to disagree about.
+/** One row of the box as drawn: the characters `[start, end)` of the message. A row ends
+ *  where the width runs out or where a `\n` sits -- the `\n` itself is on no row, it is
+ *  the gap between two. */
+export interface VisualRow { start: number; end: number }
+
+/** Every row the message takes at `width`. A message with line breaks in it (the phone's
+ *  box is a plain multi-line field, and Enter here is what Enter is there) is a list of
+ *  lines, each hard-wrapped at the width; a line that exactly fills its last row still
+ *  gets the caret's own cell as a row of its own, and an empty line is one empty row, so
+ *  a message that ends in `\n` shows where the next character goes.
  *
- *  `total` counts the caret's own cell past the last character: a message that exactly
- *  fills its last row still has to show you where the next character goes. When the
- *  message overflows, the window is anchored so the caret sits on the LAST visible row --
- *  which is where it is while typing, the common case -- and moves up with it. Pure, so
- *  tests/testSendToSession.ts pins it without a render. */
-export function wrapField(text: string, cursor: number, width: number, minRows: number, maxRows: number) {
+ *  Character-wrapped, not word-wrapped, on purpose: the caret's cell is then arithmetic
+ *  on the row it is in, and a click in the box maps back to a character the same way,
+ *  with nothing for the two to disagree about. */
+export function visualRows(text: string, width: number): VisualRow[] {
+  const rows: VisualRow[] = [];
+  let lineStart = 0;
+  for (;;) {
+    const nl = text.indexOf('\n', lineStart);
+    const lineEnd = nl < 0 ? text.length : nl;
+    const len = lineEnd - lineStart;
+    for (let k = 0; k <= Math.floor(len / width); k++) {
+      const start = lineStart + k * width;
+      rows.push({ start, end: Math.min(lineEnd, start + width) });
+    }
+    if (nl < 0) return rows;
+    lineStart = nl + 1;
+  }
+}
+
+/** The row the caret is on, and its column there. A caret sitting exactly at the end of a
+ *  full row belongs to the NEXT row (its first cell), because that is where the next
+ *  character will be drawn -- unless the row is the last of its line, where "the end" is
+ *  the cell after its last character. */
+export function caretCell(rows: VisualRow[], text: string, cursor: number): { row: number; col: number } {
   const at = Math.max(0, Math.min(cursor, text.length));
-  const total = Math.floor(text.length / width) + 1;
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i];
+    const lastOfLine = i === rows.length - 1 || rows[i + 1].start !== r.end;
+    if (at >= r.start && (at < r.end || (at === r.end && lastOfLine))) return { row: i, col: at - r.start };
+  }
+  const last = rows[rows.length - 1];
+  return { row: rows.length - 1, col: at - last.start };
+}
+
+/** The message as the box shows it: `visible` of its rows, chosen so the caret is always
+ *  on screen. When the message overflows, the window is anchored so the caret sits on the
+ *  LAST visible row -- which is where it is while typing, the common case -- and moves up
+ *  with it. Pure, so tests/testSendToSession.ts pins it without a render. */
+export function wrapField(text: string, cursor: number, width: number, minRows: number, maxRows: number) {
+  const all = visualRows(text, width);
+  const total = all.length;
   const visible = Math.max(minRows, Math.min(maxRows, total));
-  const caretAbs = Math.floor(at / width);
-  const top = Math.max(0, caretAbs - visible + 1);
+  const caret = caretCell(all, text, cursor);
+  const top = Math.max(0, caret.row - visible + 1);
   const rows: string[] = [];
   for (let i = 0; i < visible; i++) {
-    const r = top + i;
-    rows.push(r < total ? text.slice(r * width, (r + 1) * width) : '');
+    const r = all[top + i];
+    rows.push(r ? text.slice(r.start, r.end) : '');
   }
-  return { rows, caretRow: caretAbs - top, caretCol: at % width, top, total, visible };
+  return { rows, caretRow: caret.row - top, caretCol: caret.col, top, total, visible };
 }
 
 /** The character a click at (`row`, `col`) inside the box means, given which rows the box
  *  is showing. Past the end of a row is the end of that row; below the text is its end. */
 export function cursorAtCell(text: string, top: number, width: number, row: number, col: number): number {
-  const start = (top + Math.max(0, row)) * width;
-  return Math.min(text.length, start + Math.max(0, Math.min(col, width)));
+  const all = visualRows(text, width);
+  const r = all[top + Math.max(0, row)];
+  if (!r) return text.length;
+  return Math.min(r.end, r.start + Math.max(0, col));
+}
+
+/** THE BOX'S OWN KEYS -- what a multi-line field has that the one-line topic does not.
+ *  Up and Down walk the rows (the topic field, having one row, sends them to its ends);
+ *  Home, End and the two kills work on the ROW and the LINE rather than on the whole
+ *  message, as they do in any editor with more than one line in it. Everything else is
+ *  the topic field's key, unchanged. */
+export type FieldAction = TopicAction | 'up' | 'down';
+
+export function fieldKeyAt(s: string): { action: FieldAction; consumed: number } | null {
+  const arrow = s.match(/^\x1b(?:\[(?:1;\d)?|O)([AB])/);
+  if (arrow) return { action: arrow[1] === 'A' ? 'up' : 'down', consumed: arrow[0].length };
+  return topicKeyAt(s);
+}
+
+export function applyFieldAction(field: TopicField, action: FieldAction, width: number): TopicField {
+  const text = field.buffer;
+  const at = Math.max(0, Math.min(field.cursor, text.length));
+  const rows = visualRows(text, width);
+  const here = caretCell(rows, text, at);
+  const rowOf = (i: number) => rows[Math.max(0, Math.min(rows.length - 1, i))];
+  switch (action) {
+    case 'up': case 'down': {
+      const i = here.row + (action === 'up' ? -1 : 1);
+      if (i < 0 || i >= rows.length) return { buffer: text, cursor: at };
+      const r = rowOf(i);
+      return { buffer: text, cursor: Math.min(r.end, r.start + here.col) };
+    }
+    case 'home': return { buffer: text, cursor: rowOf(here.row).start };
+    case 'end': return { buffer: text, cursor: rowOf(here.row).end };
+    case 'killToStart': {
+      const ls = text.lastIndexOf('\n', at - 1) + 1;
+      return { buffer: text.slice(0, ls) + text.slice(at), cursor: ls };
+    }
+    case 'killToEnd': {
+      const nl = text.indexOf('\n', at);
+      const le = nl < 0 ? text.length : nl;
+      return { buffer: text.slice(0, at) + text.slice(le), cursor: at };
+    }
+    default: return applyTopicAction(field, action);
+  }
 }
 
 /** Where every row of the dialog lands, as offsets from its top border. -1 = not drawn.
@@ -612,7 +710,7 @@ export function computeSendLayout(s: SendDialogState) {
       // What it is being added TO, so the message you are still dictating is in front of
       // you while you dictate the rest of it. Two rows at most, from the END: the last
       // words are the ones the next breath continues.
-      if (addingOn(s)) { echoRow = row; echoRows = Math.min(2, Math.ceil(s.transcript.length / FIELD_WIDTH)); row += echoRows; }
+      if (addingOn(s)) { echoRow = row; echoRows = Math.min(2, visualRows(s.transcript, FIELD_WIDTH).length); row += echoRows; }
       actionRow = row; row++;
       break;
     }

@@ -16,7 +16,7 @@ import stringWidth from "string-width";
 import { SendDialogOverlay } from "../SendDialogOverlay.js";
 import {
   openTyping, micOpened, computeSendLayout, sendHitTest, buttonCells, writeRowButtons, actionRowButtons,
-  sendTitle, sendHint, sendErrorLine, UNDO_BUTTON, SEND_DIALOG_INNER, FIELD_WIDTH, wrapField,
+  sendTitle, sendHint, sendErrorLine, UNDO_BUTTON, SEND_DIALOG_INNER, FIELD_WIDTH, wrapField, visualRows,
   FIELD_MIN_ROWS, FIELD_MAX_ROWS,
 } from "../sendToSession.js";
 import type { SendDialogState } from "../sendToSession.js";
@@ -112,7 +112,8 @@ async function check(name: string, s: SendDialogState) {
     // the border (colOff 2 is character 0 of the first visible row), and a scrolled box
     // counts from the rows above the window.
     const hit = at(layout.fieldRow, 4);
-    const want = Math.min(s.transcript.length, w.top * FIELD_WIDTH + 2);
+    const first = visualRows(s.transcript, FIELD_WIDTH)[w.top];
+    const want = Math.min(first.end, first.start + 2);
     if (hit?.item !== 1 || hit.cursor !== want) fail(`${name}: a click on the third field cell maps to ${JSON.stringify(hit)}, expected cursor ${want}`);
   }
   // Chrome is not a control.
@@ -131,6 +132,9 @@ await check("confirm, fixing", { ...words("hello"), fixing: true });
 await check("confirm, fix refused", { ...words("hello"), fixNote: "spelling fixer is down — start it", fixFailed: true });
 await check("confirm, overflowing", words("w".repeat(FIELD_WIDTH * 9 + 3)));
 await check("confirm, caret mid-text", { ...words("hello world"), cursor: 4 });
+await check("confirm, three lines", words("first line\nsecond, which is longer than the first\nthird"));
+await check("confirm, caret on a break", { ...words("ab\ncd"), cursor: 2 });
+await check("confirm, ends in a break", words("ab\n"));
 await check("confirm, no topic", { ...words("hello"), topic: "" });
 await check("confirm, long topic", { ...words("hello"), topic: "t".repeat(120) });
 await check("recording", micOpened(base()));

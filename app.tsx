@@ -15,7 +15,7 @@ import { topicKeyAt, applyTopicAction, insertTopicText, insertFieldText } from "
 import { useMarqueeTick } from "./marquee.js";
 import { ContextMenuOverlay } from "./ContextMenuOverlay.js";
 import { SendDialogOverlay } from "./SendDialogOverlay.js";
-import { SendFlow, openTyping, computeSendLayout, sendHitTest, SEND_ITEM, SEND_DIALOG_INNER, deliveryRefusal, SUBMIT_DELAY_MS, MESSAGE_MAX_CHARS } from "./sendToSession.js";
+import { SendFlow, openTyping, computeSendLayout, sendHitTest, fieldKeyAt, applyFieldAction, normalizeNewlines, NEWLINE, SEND_ITEM, SEND_DIALOG_INNER, FIELD_WIDTH, deliveryRefusal, SUBMIT_DELAY_MS, MESSAGE_MAX_CHARS } from "./sendToSession.js";
 import type { SendDialogState, SendIo } from "./sendToSession.js";
 import { startRecording, transcribeRecording, fixSpelling } from "./dictation.js";
 import { clipboardWrite, clipboardRead } from "./clipboard.js";
@@ -619,15 +619,18 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
             }
             pos += sgr[0].length; continue;
           }
-          // Alt+Enter: insert -- type the words and stop, the phone's second button.
+          // Alt+Enter is claude's own newline (Option+Enter), and it is a newline here too
+          // -- a hand that reaches for it gets a line break, never a send.
           if (rest.startsWith('\x1b\r') || rest.startsWith('\x1b\n')) {
-            if (s.phase === 'confirm') flow.send(false);
+            if (s.phase === 'confirm') flow.edit(insertFieldText({ buffer: s.transcript, cursor: s.cursor }, NEWLINE, MESSAGE_MAX_CHARS));
             pos += 2; continue;
           }
           if (s.phase === 'confirm') {
-            const key = topicKeyAt(rest);
+            // The box's keys: Up/Down walk the rows, Home/End and the kills work on the row
+            // and the line, and everything else is the topic field's (fieldKeyAt).
+            const key = fieldKeyAt(rest);
             if (key) {
-              flow.edit(applyTopicAction({ buffer: s.transcript, cursor: s.cursor }, key.action));
+              flow.edit(applyFieldAction({ buffer: s.transcript, cursor: s.cursor }, key.action, FIELD_WIDTH));
               pos += key.consumed; continue;
             }
           }
@@ -644,37 +647,34 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
           pos += esc ? esc[0].length : 1; continue;
         }
         const ch = rest[0];
-        if (ch === '\r' || ch === '\n') {
-          // A lone Enter is the verb of the step. Arriving in one read WITH printable
-          // characters it is a line break inside a paste, and in a one-line message box a
-          // line break is a space (the printable branch below takes it) -- not a send of
-          // half a thought.
-          const pasted = s.phase === 'confirm' && /[^\x00-\x1f\x7f]/.test(inBuf);
-          if (!pasted) {
-            if (s.phase === 'confirm') flow.send(true);
-            else if (s.phase === 'recording') flow.done();
-            else if (s.phase === 'failed') flow.cancel();
-            pos++; continue;
-          }
+        // Enter, OUTSIDE the box, is the verb of the step: done while listening, close on
+        // the failed step. In the box it is a line break -- the printable branch below
+        // takes it -- because that is what it is in the phone's box (see actionRowButtons).
+        if ((ch === '\r' || ch === '\n') && s.phase !== 'confirm') {
+          if (s.phase === 'recording') flow.done();
+          else if (s.phase === 'failed') flow.cancel();
+          pos++; continue;
         }
         if (ch === '\x03') { flow.cancel(); pos++; continue; }            // Ctrl+C
         if (s.phase === 'confirm') {
+          if (ch === '\x13') { flow.send(true); pos++; continue; }       // Ctrl+S: send
+          if (ch === '\x0f') { flow.send(false); pos++; continue; }      // Ctrl+O: insert
           if (ch === '\x14') { flow.speak(); pos++; continue; }          // Ctrl+T: talk
           if (ch === '\x18') { flow.fix(); pos++; continue; }            // Ctrl+X: fix typos
           if (ch === '\x1a') { flow.undo(); pos++; continue; }           // Ctrl+Z: undo the fix
           if (ch === '\x12') { flow.useDropped(); pos++; continue; }     // Ctrl+R: use what I said
-          const key = topicKeyAt(ch);
+          const key = fieldKeyAt(ch);
           if (key) {
-            flow.edit(applyTopicAction({ buffer: s.transcript, cursor: s.cursor }, key.action));
+            flow.edit(applyFieldAction({ buffer: s.transcript, cursor: s.cursor }, key.action, FIELD_WIDTH));
             pos += key.consumed; continue;
           }
-          // A run of printable characters -- one keystroke, or a paste -- goes in at the
-          // caret in one step. Line breaks inside the run become spaces: the message is one
-          // line, because the prompt it is typed into submits on a newline.
+          // A run of printable characters and line breaks -- one keystroke, or a paste --
+          // goes in at the caret in one step, every break as the one byte claude reads as
+          // a newline (normalizeNewlines), so a pasted paragraph lands with its lines.
           let end = pos;
           while (end < inBuf.length && (inBuf.charCodeAt(end) >= 32 || inBuf[end] === '\r' || inBuf[end] === '\n') && inBuf[end] !== '\x7f') end++;
           if (end > pos) {
-            const run = inBuf.slice(pos, end).replace(/\r\n|\r|\n/g, ' ');
+            const run = normalizeNewlines(inBuf.slice(pos, end));
             flow.edit(insertFieldText({ buffer: s.transcript, cursor: s.cursor }, run, MESSAGE_MAX_CHARS));
             pos = end; continue;
           }

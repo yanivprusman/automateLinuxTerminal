@@ -4,7 +4,7 @@ import type { SendDialogState, SendButton } from "./sendToSession.js";
 import {
   computeSendLayout, sendTitle, sendHint, sendErrorLine, writeRowButtons, actionRowButtons,
   buttonCells, UNDO_BUTTON, SEND_ITEM, SEND_DIALOG_INNER, sendPad, sendBorder,
-  FIELD_WIDTH, FIELD_MIN_ROWS, FIELD_MAX_ROWS, wrapField, addingOn,
+  FIELD_WIDTH, FIELD_MIN_ROWS, FIELD_MAX_ROWS, wrapField, visualRows, addingOn,
 } from "./sendToSession.js";
 
 // The "send to session" dialog, drawn. What each row IS lives in sendToSession.ts
@@ -149,8 +149,7 @@ function NoteRow({ s }: { s: SendDialogState }) {
 
 /** The last rows of the message, dim, while more of it is being dictated. */
 function EchoRows({ s, rows }: { s: SendDialogState; rows: number }) {
-  const chunks: string[] = [];
-  for (let i = 0; i < s.transcript.length; i += FIELD_WIDTH) chunks.push(s.transcript.slice(i, i + FIELD_WIDTH));
+  const chunks = visualRows(s.transcript, FIELD_WIDTH).map(r => s.transcript.slice(r.start, r.end));
   const shown = chunks.slice(-rows);
   return (
     <>
