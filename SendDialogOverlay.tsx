@@ -182,7 +182,7 @@ export function SendDialogOverlay({ state: s }: { state: SendDialogState }) {
       <Plain text={` ${sendTitle(s)}`} color={WHITE} bold />
       <LabelRow s={s} />
       {error !== null && <Plain text={` ${error}`} color={RED} />}
-      {layout.hintRow >= 0 && hintRow}
+      {hintRow}
       {layout.fieldRow >= 0 && <FieldRows s={s} />}
       {layout.echoRow >= 0 && <EchoRows s={s} rows={layout.echoRows} />}
       {layout.noteRow >= 0 && <NoteRow s={s} />}

@@ -451,10 +451,7 @@ export function sendHint(s: SendDialogState): string {
     default:
       if (s.dictationFailed) return 'Your message is as it was — say it again or send it.';
       if (s.error) return 'Nothing was lost — send it again to retry.';
-      // Typing is the one case with nothing to say: the cursor is already in the box and
-      // the title above it said where the words go, so a line telling you to type is the
-      // sentence you are busy disproving. No words, and `computeSendLayout` drops the row.
-      if (s.typed) return '';
+      if (s.typed) return 'Type what you want to send.';
       return 'Fix anything the transcription got wrong, then send.';
   }
 }
@@ -699,7 +696,7 @@ export function computeSendLayout(s: SendDialogState) {
   switch (s.phase) {
     case 'confirm': {
       if (sendErrorLine(s)) { errorRow = row; row++; }
-      if (sendHint(s)) { hintRow = row; row++; }
+      hintRow = row; row++;
       fieldRow = row;
       fieldRows = wrapField(s.transcript, s.cursor, FIELD_WIDTH, FIELD_MIN_ROWS, FIELD_MAX_ROWS).visible;
       row += fieldRows;
