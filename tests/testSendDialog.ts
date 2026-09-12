@@ -84,7 +84,7 @@ symlinkSync("/bin/bash", join(dir, "claude"));
 
     // 3. THE ROW OPENS THE DIALOG, in the menu's place, focused on an empty box.
     out = ""; clickMenuRow(sendRowOff); await wait(1500);
-    check("clicking the row opens the dialog", frame().includes("Type what you want to send"), "no dialog hint on screen");
+    check("clicking the row opens the dialog", frame().includes("esc cancel"), "no dialog on screen");
     check("the dialog names the session's state honestly", frame().includes("unknown"), "the label does not carry the (unknown) id");
     check("the menu is gone", !frame().includes("start claude"), "the menu is still drawn under the dialog");
 
@@ -112,20 +112,20 @@ symlinkSync("/bin/bash", join(dir, "claude"));
     // 6. CTRL+S SENDS: the words reach the claude with their break and an Enter after them.
     out = ""; app.write("\x13"); await wait(1800);
     check("ctrl+s delivers the words to the claude", out.includes("GOT:hello") && out.includes("GOT:world"), `claude saw: ${JSON.stringify(out.match(/GOT:[^\r\n]*/g))}`);
-    check("the dialog closes once the words have landed", !frame().includes("Type what you want to send"), "the dialog is still up");
+    check("the dialog closes once the words have landed", !frame().includes("esc cancel"), "the dialog is still up");
 
     // 7. ESCAPE CANCELS: nothing reaches the claude.
     out = ""; click(LEFT, COLS - 10, 1); await wait(1200); clickMenuRow(sendRowOff); await wait(1200);
-    check("the dialog opens again", frame().includes("Type what you want to send"), "no dialog");
+    check("the dialog opens again", frame().includes("esc cancel"), "no dialog");
     out = ""; app.write("dropped"); await wait(600); app.write("\x1b"); await wait(900);
-    check("escape closes the dialog", !frame().includes("Type what you want to send"), "the dialog is still up");
+    check("escape closes the dialog", !frame().includes("esc cancel"), "the dialog is still up");
     app.write("\r"); await wait(1000);   // an Enter at the claude: would submit anything that leaked
     check("...and nothing leaked into the claude", !out.includes("GOT:dropped"), `claude saw: ${JSON.stringify(out.match(/GOT:[^\r\n]*/g))}`);
 
     // 8. CTRL+O INSERTS: the words reach the claude WITHOUT an Enter.
     out = ""; click(LEFT, COLS - 10, 1); await wait(1200); clickMenuRow(sendRowOff); await wait(1200);
     out = ""; app.write("inserted"); await wait(600); app.write("\x0f"); await wait(1200);
-    check("ctrl+o closes the dialog", !frame().includes("Type what you want to send"), "the dialog is still up");
+    check("ctrl+o closes the dialog", !frame().includes("esc cancel"), "the dialog is still up");
     check("...without submitting", !out.includes("GOT:inserted"), "the claude got an Enter it was not sent");
     app.write("\r"); await wait(1000);
     check("...the words were typed, waiting at the prompt", out.includes("GOT:inserted"), `claude saw: ${JSON.stringify(out.match(/GOT:[^\r\n]*/g))}`);
@@ -133,7 +133,7 @@ symlinkSync("/bin/bash", join(dir, "claude"));
     // 9. A CLICK OUTSIDE DISMISSES, as a tap outside the phone's popup does.
     out = ""; click(LEFT, COLS - 10, 1); await wait(1200); clickMenuRow(sendRowOff); await wait(1200);
     out = ""; app.write("outside"); await wait(500); click(LEFT, 5, 30); await wait(900);
-    check("a click outside the dialog dismisses it", !frame().includes("Type what you want to send"), "the dialog is still up");
+    check("a click outside the dialog dismisses it", !frame().includes("esc cancel"), "the dialog is still up");
     app.write("\r"); await wait(800);
     check("...and drops the words", !out.includes("GOT:outside"), "the words leaked");
   } finally {
