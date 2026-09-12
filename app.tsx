@@ -329,8 +329,18 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
       needsRefresh.current = true;
     }, 1000);
 
-    const refreshId = setInterval(() => {
-      if (!needsRefresh.current) return;
+    // The screen used to repaint on a fixed 50ms poll, so a keystroke waited up to 50ms
+    // (25ms on average) before it could even be drawn -- before the React reconcile, Ink's
+    // full-screen repaint and the host terminal's own render had even started. At 8ms the
+    // wait is at most one frame at 120Hz. The body below is unchanged and still returns
+    // immediately when nothing is new, so the faster tick costs one boolean check; only a
+    // repaint that actually has work does work. Under a flood (a build log) a repaint
+    // costing more than SLOW_RENDER_MS backs the next one off by twice its cost, so the
+    // render cannot spin at 125Hz against a process that prints faster than we can draw.
+    const REFRESH_TICK_MS = 8;
+    const SLOW_RENDER_MS = 12;
+    let nextAllowedRender = 0;
+    const doRefresh = () => {
       needsRefresh.current = false;
       const d = dimsRef.current;
       const buf = term.buffer.active;
@@ -363,7 +373,16 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
       if (!anyChanged) return;
       contentCache.current = newLines;
       setLines(newLines);
-    }, 50);
+    };
+
+    const refreshId = setInterval(() => {
+      if (!needsRefresh.current) return;
+      const start = Date.now();
+      if (start < nextAllowedRender) return;
+      doRefresh();
+      const cost = Date.now() - start;
+      nextAllowedRender = cost > SLOW_RENDER_MS ? Date.now() + cost * 2 : 0;
+    }, REFRESH_TICK_MS);
 
     process.stdout.write('\x1b[?1002h\x1b[?1006h');
 
