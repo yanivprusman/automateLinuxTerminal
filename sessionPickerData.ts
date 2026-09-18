@@ -150,6 +150,17 @@ function matchCwd(text: string): string {
   }
 }
 
+/**
+ * Whether someone was at the keyboard: `cli` for an interactive session, `sdk-cli`
+ * for a headless `claude -p` — fixTyping's spellfix, the old namer's own calls.
+ * Those were 744 of the 943 transcripts written in the month to 2026-09-18, and
+ * not one is a session anybody would go looking for.
+ */
+export function readEntrypoint(file: string): string {
+  const m = readHead(file, HEAD_BYTES).match(/"entrypoint":"([^"]*)"/);
+  return m ? m[1] : "";
+}
+
 function readCwd(file: string): string {
   const head = matchCwd(readHead(file, HEAD_BYTES));
   if (head) return head;
