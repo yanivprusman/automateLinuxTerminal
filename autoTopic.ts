@@ -126,8 +126,12 @@ function askModel(prompt: string): { reply: string } | { error: string } {
   return { reply: res.stdout || "" };
 }
 
-/** Write the topic where every reader looks, and prove it landed. */
-function storeTopic(sessionId: string, topic: string): boolean {
+/**
+ * Write the topic where every reader looks, and prove it landed. Returns null on
+ * success, or what went wrong — "store refused" alone could not tell an
+ * unreachable dashboard from a rejected write from a readback that disagreed.
+ */
+function storeTopic(sessionId: string, topic: string): string | null {
   const url = `http://localhost:${DASHBOARD_PORT}/api/claude-sessions/${sessionId}`;
   const patch = spawnSync(
     "curl",
@@ -135,11 +139,11 @@ function storeTopic(sessionId: string, topic: string): boolean {
      "-d", JSON.stringify({ customTitle: topic }), url],
     { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
   );
-  if (patch.status !== 0) return false;
+  if (patch.status !== 0) return `dashboard unreachable: ${(patch.stderr || "").trim().slice(0, 160)}`;
   try {
-    if (JSON.parse(patch.stdout).ok !== true) return false;
+    if (JSON.parse(patch.stdout).ok !== true) return `dashboard refused the write: ${patch.stdout.trim().slice(0, 160)}`;
   } catch {
-    return false;
+    return `dashboard answered the write with non-JSON: ${patch.stdout.trim().slice(0, 160)}`;
   }
 
   // A 200 says the request was accepted, not that this session got titled.
@@ -147,11 +151,12 @@ function storeTopic(sessionId: string, topic: string): boolean {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
   });
-  if (read.status !== 0) return false;
+  if (read.status !== 0) return `readback unreachable: ${(read.stderr || "").trim().slice(0, 160)}`;
   try {
-    return JSON.parse(read.stdout).customTitle === topic;
+    const got = JSON.parse(read.stdout).customTitle;
+    return got === topic ? null : `readback has ${JSON.stringify(got ?? "")}`;
   } catch {
-    return false;
+    return `readback was non-JSON: ${read.stdout.trim().slice(0, 160)}`;
   }
 }
 
@@ -237,8 +242,9 @@ function nameOne(session: TopicSession, brief: string, allTopics: Map<string, st
     console.log(`${id8}: would set "${topic}"${was}`);
     return true;
   }
-  if (!storeTopic(session.sessionId, topic)) {
-    console.log(`${id8}: store refused "${topic}" — left as it was`);
+  const stored = storeTopic(session.sessionId, topic);
+  if (stored) {
+    console.log(`${id8}: could not store "${topic}" (${stored}) — left as it was`);
     return false;
   }
   allTopics.set(session.sessionId, topic);
