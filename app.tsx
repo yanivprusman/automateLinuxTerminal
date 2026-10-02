@@ -30,6 +30,13 @@ import { isVoiceMuted, isVoiceMutedGlobally, setVoiceMuted } from "./voice.js";
 // this terminal.
 const VOICE_HISTORY_CMD = "/root/bin/claude-voice-history";
 const SAY_CTL_CMD = "/root/bin/say-ctl";
+// The Claude Voice paste box, opened holding the selection (the clipboard menu's "Say"). It
+// owns its own single window -- an open one is refilled rather than duplicated -- and the
+// text goes in on stdin, never argv, so a selection starting with "-" is text, not a flag.
+// Through runInGuiSession so the window is not a child of this tab's scope: the first launch
+// IS the window, and closing the tab must not take it with it.
+const SPEAK_TEXT_CMD = "/root/bin/speak-text";
+const RUN_IN_GUI_SESSION = "/opt/automateLinux/utilities/runInGuiSession.sh";
 
 function Clock() {
   const [now, setNow] = useState(new Date());
@@ -396,10 +403,12 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
       }
     };
 
-    const copySelectionToClipboard = () => {
-      if (!selection.current) return;
+    // The selected cells as text, one line per row, trailing blanks trimmed. '' when there is
+    // no selection or it is a single point.
+    const selectedText = (): string => {
+      if (!selection.current) return '';
       const sel = normalizeSelection(selection.current);
-      if (sel.startRow === sel.endRow && sel.startCol === sel.endCol) return;
+      if (sel.startRow === sel.endRow && sel.startCol === sel.endCol) return '';
       const buf = term.buffer.active;
       const textLines: string[] = [];
       for (let y = sel.startRow; y <= sel.endRow; y++) {
@@ -414,9 +423,29 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
         }
         textLines.push(t.trimEnd());
       }
-      const text = textLines.join('\n');
+      return textLines.join('\n');
+    };
+
+    const copySelectionToClipboard = () => {
+      const text = selectedText();
       if (text.trim()) {
         clipboardWrite(text);
+      }
+      selection.current = null;
+      needsRefresh.current = true;
+    };
+
+    // Open the speak box holding the selection. Detached: the launched process is the
+    // window itself (or hands the text to the one already open and exits).
+    const saySelection = () => {
+      const text = selectedText();
+      if (text.trim()) {
+        const child = spawn(RUN_IN_GUI_SESSION, [SPEAK_TEXT_CMD, '--stdin'],
+                            { detached: true, stdio: ['pipe', 'ignore', 'ignore'] });
+        child.on('error', () => {});
+        child.stdin?.on('error', () => {});
+        child.stdin?.end(text);
+        child.unref();
       }
       selection.current = null;
       needsRefresh.current = true;
@@ -500,7 +529,7 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
 
     const openClipboardMenu = (row: number, col: number) => {
       const d = dimsRef.current;
-      const menuH = 4, menuW = 10;
+      const menuH = 5, menuW = 10;
       const r = Math.max(0, Math.min(row, d.rows - menuH));
       const c = Math.max(0, Math.min(col, d.cols - menuW));
       const hasSel = !!selection.current && (() => {
@@ -794,7 +823,7 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
                 }
                 menuW = SESSION_MENU_INNER;
               } else {
-                itemIdx = rowOff === 1 ? 0 : rowOff === 2 ? 1 : -1;
+                itemIdx = rowOff === 1 ? 0 : rowOff === 2 ? 1 : rowOff === 3 ? 2 : -1;
                 menuW = 8;
               }
               const onItem = itemIdx >= 0 && (mCol - m.col) >= 1 && (mCol - m.col) <= menuW;
@@ -1186,6 +1215,7 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
                 if (m.kind === 'clipboard') {
                   if (onItem && itemIdx === 0 && m.hasSelection) copySelectionToClipboard();
                   else if (onItem && itemIdx === 1) pasteFromClipboard();
+                  else if (onItem && itemIdx === 2 && m.hasSelection) saySelection();
                 }
                 closeMenu();
               } else if (button === 2 && isPress) {

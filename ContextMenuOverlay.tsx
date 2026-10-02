@@ -435,6 +435,11 @@ export function ContextMenuOverlay({ menu }: { menu: ContextMenuState }) {
         <Text backgroundColor={menu.hoverItem === 1 ? "#3465a4" : "#2d2d2d"} color="#ffffff">{" Paste  "}</Text>
         <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
       </Text>
+      <Text>
+        <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
+        <Text backgroundColor={menu.hoverItem === 2 ? "#3465a4" : "#2d2d2d"} color={copyColor}>{" Say    "}</Text>
+        <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
+      </Text>
       <Text backgroundColor="#2d2d2d" color="#888888">{"╰────────╯"}</Text>
     </Box>
   );

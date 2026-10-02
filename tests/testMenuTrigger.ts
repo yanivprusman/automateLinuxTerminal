@@ -41,7 +41,7 @@ const LEFT = 0, RIGHT = 2;
 // Rows only the session menu draws, and only the clipboard menu draws. Read off the
 // overlay rather than off box-drawing characters, which both menus share.
 const SESSION_ROWS = ["mute voice", "start claude", "exit this terminal"];
-const CLIPBOARD_ROWS = ["Copy", "Paste"];
+const CLIPBOARD_ROWS = ["Copy", "Paste", "Say"];
 const seen = (rows: string[], text: string) => rows.filter(r => text.includes(r));
 
 let failures = 0;
@@ -71,7 +71,7 @@ const check = (name: string, ok: boolean, detail: string) => {
 
   out = ""; click(RIGHT, 20, 20); await wait(1500);
   check("right click still opens the clipboard menu",
-        seen(CLIPBOARD_ROWS, out).length === 2, `drew ${JSON.stringify(seen(CLIPBOARD_ROWS, out))}`);
+        seen(CLIPBOARD_ROWS, out).length === 3, `drew ${JSON.stringify(seen(CLIPBOARD_ROWS, out))}`);
   out = ""; click(LEFT, 20, 20); await wait(1000);   // dismiss it
 
   // THE TOPIC FIELD TAKES THE KEYS A TEXT FIELD OWNS.
