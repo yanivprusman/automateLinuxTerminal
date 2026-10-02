@@ -435,18 +435,20 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
       needsRefresh.current = true;
     };
 
-    // Open the speak box holding the selection. Detached: the launched process is the
-    // window itself (or hands the text to the one already open and exits).
+    // Open the speak box holding the selection -- or, with nothing selected, exactly as its
+    // desktop icon opens it (prefilled from the clipboard, or empty to type into). Detached:
+    // the launched process is the window itself (or hands over to the open one and exits).
     const saySelection = () => {
       const text = selectedText();
-      if (text.trim()) {
-        const child = spawn(RUN_IN_GUI_SESSION, [SPEAK_TEXT_CMD, '--stdin'],
-                            { detached: true, stdio: ['pipe', 'ignore', 'ignore'] });
-        child.on('error', () => {});
+      const withText = !!text.trim();
+      const child = spawn(RUN_IN_GUI_SESSION, withText ? [SPEAK_TEXT_CMD, '--stdin'] : [SPEAK_TEXT_CMD],
+                          { detached: true, stdio: [withText ? 'pipe' : 'ignore', 'ignore', 'ignore'] });
+      child.on('error', () => {});
+      if (withText) {
         child.stdin?.on('error', () => {});
         child.stdin?.end(text);
-        child.unref();
       }
+      child.unref();
       selection.current = null;
       needsRefresh.current = true;
     };
@@ -1215,7 +1217,7 @@ function TerminalEmulator({ rows, cols }: { rows: number; cols: number }) {
                 if (m.kind === 'clipboard') {
                   if (onItem && itemIdx === 0 && m.hasSelection) copySelectionToClipboard();
                   else if (onItem && itemIdx === 1) pasteFromClipboard();
-                  else if (onItem && itemIdx === 2 && m.hasSelection) saySelection();
+                  else if (onItem && itemIdx === 2) saySelection();
                 }
                 closeMenu();
               } else if (button === 2 && isPress) {
