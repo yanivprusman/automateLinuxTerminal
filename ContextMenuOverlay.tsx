@@ -2,7 +2,7 @@ import React from "react";
 import { Box, Text } from "ink";
 import type { ContextMenuState, SessionHistoryEntry } from "./types.js";
 import { APP_VERSION } from "./session.js";
-import { SESSION_MENU_INNER, sessionMenuPad, sessionMenuBorder, muteLabelParts, muteRowColors, formatElapsed, TOPIC_VIEW_WIDTH, TOPIC_PIN_CELLS, SESSION_ID_LABEL, SESSION_CWD_LABEL, SESSION_COPY_SHORT_LABEL, sessionResumeHead, marqueeWindow, captionsLabel, replayLabel, launchLabel, exitLabel, sendLabel } from "./menu.js";
+import { SESSION_MENU_INNER, sessionMenuPad, sessionMenuBorder, muteLabelParts, muteRowColors, formatElapsed, TOPIC_VIEW_WIDTH, TOPIC_PIN_CELLS, SESSION_ID_LABEL, SESSION_CWD_LABEL, SESSION_COPY_SHORT_LABEL, sessionResumeHead, marqueeWindow, captionsLabel, replayLabel, launchLabel, exitLabel, exitProgressLabel, EXIT_SPINNER_STEP_MS, sendLabel } from "./menu.js";
 import { editView } from "./topicEdit.js";
 import { useMarqueeTick } from "./marquee.js";
 
@@ -11,6 +11,25 @@ import { useMarqueeTick } from "./marquee.js";
  *  because the two are the same words in the same dim, and a field that invited you in
  *  with different words than the row rested under would read as two different rows. */
 const TOPIC_PLACEHOLDER = "set topic…";
+
+/** The exit row's label cell. Its own component for the same reason TopicRow is: it owns
+ *  a clock (the spinner while a phase is showing), and only this cell should redraw at that
+ *  rate -- the rest of the menu stays a still frame, and a resting exit row runs no timer. */
+function ExitRow({ menu }: { menu: ContextMenuState }) {
+  const working = !!menu.exitMsg && !menu.exitFailed;
+  const tick = useMarqueeTick(working, "", EXIT_SPINNER_STEP_MS);
+  const label = !menu.exitMsg ? exitLabel(menu.sessions.some(s => s.alive))
+    : working ? exitProgressLabel(menu.exitMsg, tick)
+    : ` ${menu.exitMsg}`;
+  return (
+    <Text
+      backgroundColor={menu.hoverItem === 40 ? "#3465a4" : "#2d2d2d"}
+      color={menu.exitFailed ? "#cc0000" : menu.exitMsg ? "#34e2e2" : "#f57900"}
+    >
+      {sessionMenuPad(label)}
+    </Text>
+  );
+}
 
 /** The topic field: the pin box and the topic itself, on ONE row, closed off by a rule.
  *
@@ -387,12 +406,7 @@ export function ContextMenuOverlay({ menu }: { menu: ContextMenuState }) {
         <Text backgroundColor="#2d2d2d" color="#888888">{`├${sessionMenuBorder}┤`}</Text>
         <Text>
           <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
-          <Text
-            backgroundColor={menu.hoverItem === 40 ? "#3465a4" : "#2d2d2d"}
-            color={menu.exitFailed ? "#cc0000" : menu.exitMsg ? "#34e2e2" : "#f57900"}
-          >
-            {sessionMenuPad(menu.exitMsg ? ` ${menu.exitMsg}` : exitLabel(menu.sessions.some(s => s.alive)))}
-          </Text>
+          <ExitRow menu={menu} />
           <Text backgroundColor="#2d2d2d" color="#888888">{"│"}</Text>
         </Text>
         {/* What this menu is, and which version of it, used to hold the top row of every

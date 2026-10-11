@@ -10,14 +10,16 @@ import { MARQUEE_STEP_MS } from "./menu.js";
  *  something out of view.
  *
  *  `resetKey` restarts the pass. A new topic must begin at its first character rather than
- *  inheriting the phase of the one it replaced. */
-export function useMarqueeTick(active: boolean, resetKey: string = ""): number {
+ *  inheriting the phase of the one it replaced.
+ *
+ *  `stepMs` lets a spinner share the same clock at its own rate. */
+export function useMarqueeTick(active: boolean, resetKey: string = "", stepMs: number = MARQUEE_STEP_MS): number {
   const [tick, setTick] = useState(0);
   useEffect(() => {
     setTick(0);
     if (!active) return;
-    const id = setInterval(() => setTick(t => t + 1), MARQUEE_STEP_MS);
+    const id = setInterval(() => setTick(t => t + 1), stepMs);
     return () => clearInterval(id);
-  }, [active, resetKey]);
+  }, [active, resetKey, stepMs]);
   return tick;
 }

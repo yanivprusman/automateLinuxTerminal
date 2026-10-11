@@ -166,6 +166,19 @@ export const EXIT_LABEL_BARE = "exit this terminal";
 export const exitLabel = (liveClaude: boolean) =>
   ` ✕ ${liveClaude ? EXIT_LABEL_WITH_CLAUDE : EXIT_LABEL_BARE}`;
 
+/** The exit row while it WORKS: its phase message with the `▸` turned into a spinner.
+ *
+ *  A phase line that sits still for the seconds claude takes to leave reads the same as one
+ *  that hung, so the mark spins for as long as a phase is showing. Only the mark moves --
+ *  the words stay where they are to be read -- and a refusal (`exitFailed`) never spins:
+ *  it is a verdict, not progress, and keeps its static `▸`.
+ *
+ *  Every frame is one cell wide, like every other mark in this menu (see above). */
+export const EXIT_SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+export const EXIT_SPINNER_STEP_MS = 100;
+export const exitProgressLabel = (msg: string, tick: number) =>
+  ` ${EXIT_SPINNER_FRAMES[tick % EXIT_SPINNER_FRAMES.length]}${msg.replace(/^▸/, "")}`;
+
 /** Longest topic the menu accepts. The row no longer has to HOLD the topic — one that
  *  overflows scrolls — so this is only a sanity bound on a string that also becomes a
  *  window title and a spoken label, not a layout constraint. */

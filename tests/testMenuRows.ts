@@ -35,7 +35,7 @@ const fail = (msg: string) => { failures++; console.log("  FAIL " + msg); };
 
 // `sess` defaults to the fixture above; the exit row's label depends on whether any session
 // in the menu is still running, so one block below draws the same menu with none.
-async function drawMenu(infoOpen: boolean, voiceMutedAll = false, sess: SessionHistoryEntry[] = sessions, overrides: Partial<ContextMenuState> = {}) {
+async function drawMenu(infoOpen: boolean, voiceMutedAll = false, sess: SessionHistoryEntry[] = sessions, overrides: Partial<ContextMenuState> = {}, waitMs = 120) {
   const layout = computeMenuLayout(sess, true, infoOpen);
   const menu: ContextMenuState = {
     kind: "automateLinuxTerminalMenu", row: 0, col: 0, hasSelection: false, hoverItem: -1,
@@ -63,7 +63,7 @@ async function drawMenu(infoOpen: boolean, voiceMutedAll = false, sess: SessionH
     React.createElement(Box, { flexDirection: "column", height: layout.height, width: 60 },
                         React.createElement(ContextMenuOverlay, { menu })),
     { stdout: out, patchConsole: false });
-  await new Promise(r => setTimeout(r, 120));
+  await new Promise(r => setTimeout(r, waitMs));
   app.unmount();
 
   // Ink pads the absolute-positioned box with blank lines above it; the drawn menu is the
@@ -510,6 +510,25 @@ for (const k of ["topicRow", "muteRow", "sessionsRow", "stopwatchRow", "launchRo
     if (stringWidth(label) > SESSION_MENU_INNER)
       fail(`"${name}" draws ${stringWidth(label)} cells into a ${SESSION_MENU_INNER}-cell row`);
   }
+}
+
+// The exit row while it works: the phase's `▸` becomes a spinner that MOVES, or a phase
+// that takes seconds reads as a click that hung. A refusal is a verdict and must not spin.
+// Ink writes only its final frame to a non-TTY stream, so motion is shown by drawing the
+// same state twice, held for different times, and reading a different mark each time.
+{
+  const phase = "▸ exiting claude…";
+  const markOn = (lines: string[]) => lines.filter(l => l.includes("exiting claude…"))
+                                           .map(l => l.replace(/^.*?│ /, "")[0]);
+  const early = markOn((await drawMenu(false, false, sessions, { exitMsg: phase }, 20)).lines);
+  const late = markOn((await drawMenu(false, false, sessions, { exitMsg: phase }, 450)).lines);
+  const spun = new Set([...early, ...late]);
+  console.log(`\nexit row while working — mark at 20 ms: ${early.join("")}, at 450 ms: ${late.join("")}`);
+  if (spun.size < 2) fail(`the exit row's phase does not animate (marks seen: ${[...spun].join(" ") || "none"})`);
+  if (spun.has("▸")) fail(`the exit row kept its static "▸" while working`);
+  for (const m of spun) if (stringWidth(m) !== 1) fail(`spinner frame "${m}" is ${stringWidth(m)} cells wide`);
+  const refused = new Set(markOn((await drawMenu(false, false, sessions, { exitMsg: phase, exitFailed: true }, 450)).lines));
+  if (refused.size !== 1 || !refused.has("▸")) fail(`a refused exit must hold a still "▸" (marks seen: ${[...refused].join(" ")})`);
 }
 
 console.log(failures ? `\nFAILED (${failures})` : "\nPASS");
