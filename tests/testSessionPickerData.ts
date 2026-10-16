@@ -5,7 +5,56 @@
 // the `→` key shows and speaks).
 //
 //   npx tsx tests/testSessionPickerData.ts
-import { loadTopicSessions, readSessionDigest, readSpokenLines } from "../sessionPickerData.js";
+import {
+  inheritForkTopics,
+  loadAllSessions,
+  loadTopicSessions,
+  readSessionDigest,
+  readSpokenLines,
+  type TopicSession,
+} from "../sessionPickerData.js";
+
+// A fork is a copy of a transcript under a new id, so it has no stored topic and
+// used to be missing from the picker — the one place you go to resume it. These
+// pin the rules it inherits its original's topic by; they need no real data.
+{
+  const row = (sessionId: string, topic: string, rootUuid: string, bornMs: number): TopicSession =>
+    ({ sessionId, topic, rootUuid, bornMs, cwd: "/x", mtimeMs: bornMs, file: "" });
+  const topicOf = (rows: TopicSession[], id: string) => rows.find((r) => r.sessionId === id)!.topic;
+  const fail = (why: string) => {
+    console.error(`FAIL (forks): ${why}`);
+    process.exit(1);
+  };
+
+  const r = inheritForkTopics([
+    row("orig", "התראה דודו בסיס conc", "root-a", 1),
+    row("fork", "", "root-a", 2),
+    row("fork2", "", "root-a", 3),
+    row("named", "my own name", "root-a", 4),
+    row("loner", "", "root-b", 5),
+    row("noroot", "", "", 6),
+  ]);
+  if (topicOf(r, "fork") !== "התראה דודו בסיס ⑂") fail(`fork got "${topicOf(r, "fork")}" — want the original's topic, conc dropped, marked`);
+  if (topicOf(r, "fork2") !== "התראה דודו בסיס ⑂") fail("a second fork must point at the same original");
+  if (topicOf(r, "named") !== "my own name") fail("a fork's own stored topic must win over the inherited one");
+  if (topicOf(r, "orig") !== "התראה דודו בסיס conc") fail("the original's topic must be left as stored");
+  if (topicOf(r, "loner") !== "") fail("a session sharing no root with a titled one must stay untitled");
+  if (topicOf(r, "noroot") !== "") fail("an empty root must never match another empty root");
+
+  // The older transcript is the original, whichever one the scan meets first.
+  const order = inheritForkTopics([
+    row("later", "named later", "root-c", 9),
+    row("earlier", "named first", "root-c", 1),
+    row("fork", "", "root-c", 10),
+  ]);
+  if (topicOf(order, "fork") !== "named first ⑂") fail(`fork inherited "${topicOf(order, "fork")}" — want the oldest titled session's`);
+
+  // Real transcripts: the root has to be readable, or nothing above ever applies.
+  const recent = loadAllSessions(Date.now() - 7 * 24 * 3600 * 1000);
+  const rooted = recent.filter((s) => s.rootUuid).length;
+  if (recent.length > 0 && rooted === 0) fail(`none of ${recent.length} recent transcripts yielded a root uuid — the transcript format changed`);
+  console.log(`forks: rules hold; ${rooted}/${recent.length} recent transcripts carry a root uuid`);
+}
 
 const { sessions, unavailable } = loadTopicSessions();
 

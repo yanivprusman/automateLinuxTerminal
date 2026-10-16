@@ -39,6 +39,15 @@ export interface TopicSession {
   mtimeMs: number;
   /** Transcript path, kept so a digest can be read on demand without re-scanning. */
   file: string;
+  /**
+   * uuid of the conversation's first message. A fork is a copy of another
+   * session's transcript under a new session id, and the copy keeps every
+   * message uuid — so two transcripts with the same root are one conversation
+   * that split. `''` when the head holds no message yet.
+   */
+  rootUuid: string;
+  /** When the transcript file was created — the original of a fork is the older one. */
+  bornMs: number;
 }
 
 /** What a session was about, in the user's own words. See readSessionDigest. */
@@ -161,8 +170,18 @@ export function readEntrypoint(file: string): string {
   return m ? m[1] : "";
 }
 
-function readCwd(file: string): string {
-  const head = matchCwd(readHead(file, HEAD_BYTES));
+/** The first message with no parent — the opening user turn, in a fork too. */
+function matchRootUuid(head: string): string {
+  for (const line of head.split("\n")) {
+    if (!line.includes('"parentUuid":null') || !line.includes('"type":"user"')) continue;
+    const m = line.match(/"uuid":"([0-9a-f-]{36})"/);
+    if (m) return m[1]!;
+  }
+  return "";
+}
+
+function readCwd(file: string, headText: string): string {
+  const head = matchCwd(headText);
   if (head) return head;
   // Rare, but pay the full read rather than deriving the directory from the
   // project-dir name: that encoding is lossy ('/root/.openclaw' becomes
@@ -291,21 +310,69 @@ export function loadAllSessions(newerThanMs = 0): TopicSession[] {
       const sessionId = entry.slice(0, -".jsonl".length);
 
       const file = `${dirPath}/${entry}`;
-      const mtimeMs = statSync(file).mtimeMs;
+      const st = statSync(file);
+      const mtimeMs = st.mtimeMs;
       if (mtimeMs < newerThanMs) continue;
       // One id can appear under two project dirs when a session's directory was
       // renamed. The newest transcript is the one `claude --resume` will read.
       const prev = byId.get(sessionId);
       if (prev && prev.mtimeMs >= mtimeMs) continue;
-      byId.set(sessionId, { sessionId, topic: topics.get(sessionId) ?? "", cwd: readCwd(file), mtimeMs, file });
+      const head = readHead(file, HEAD_BYTES);
+      byId.set(sessionId, {
+        sessionId,
+        topic: topics.get(sessionId) ?? "",
+        cwd: readCwd(file, head),
+        mtimeMs,
+        file,
+        rootUuid: matchRootUuid(head),
+        bornMs: st.birthtimeMs,
+      });
     }
   }
 
   return [...byId.values()].sort((a, b) => b.mtimeMs - a.mtimeMs);
 }
 
+/** Marks a topic the picker derived from the session a fork was copied from. */
+export const FORK_MARK = " ⑂";
+
+/**
+ * Give every untitled fork its original's topic, marked ` ⑂`.
+ *
+ * A fork starts with no topic of its own — the store is keyed by session id and
+ * the fork's id is new — so it used to be missing from the picker, which is
+ * exactly where someone goes to resume "the one before it went off elsewhere".
+ * It is derived here at read time rather than written to the store: nothing has
+ * to run at the moment of forking, it covers forks made before this existed, and
+ * a topic typed by hand (or by autoTopic) still wins, because only sessions with
+ * no stored topic inherit.
+ *
+ * The original is the titled session sharing the root whose transcript was
+ * created first (a fork of a fork still points home; ties go to the lower id so
+ * the choice never depends on directory order). ` conc` is dropped: concluding the
+ * original says nothing about where the copy got to.
+ */
+export function inheritForkTopics(sessions: TopicSession[]): TopicSession[] {
+  const origin = new Map<string, TopicSession>();
+  for (const s of sessions) {
+    if (!s.topic || !s.rootUuid || s.topic.endsWith(FORK_MARK)) continue;
+    const prev = origin.get(s.rootUuid);
+    if (!prev || s.bornMs < prev.bornMs || (s.bornMs === prev.bornMs && s.sessionId < prev.sessionId)) {
+      origin.set(s.rootUuid, s);
+    }
+  }
+  return sessions.map((s) => {
+    if (s.topic || !s.rootUuid) return s;
+    const from = origin.get(s.rootUuid);
+    if (!from) return s;
+    return { ...s, topic: `${from.topic.replace(/\s+conc$/, "")}${FORK_MARK}` };
+  });
+}
+
 export function loadTopicSessions(): PickerData {
   const topics = readTopics();
-  const sessions = loadAllSessions().filter((s) => s.topic);
-  return { sessions, unavailable: topics.size - sessions.length };
+  const all = loadAllSessions();
+  const stored = all.filter((s) => s.topic).length;
+  const sessions = inheritForkTopics(all).filter((s) => s.topic);
+  return { sessions, unavailable: topics.size - stored };
 }
